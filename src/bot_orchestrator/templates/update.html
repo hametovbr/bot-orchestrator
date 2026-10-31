@@ -1,0 +1,40 @@
+{% extends "bot_base.html" %}
+{% from "_macros.html" import status_badge %}
+{% block tab %}
+<p><a class="muted small" href="/bots/{{ bot.id }}/updates">← Updates</a></p>
+<div class="kv-grid">
+  <div>Received</div><div>{{ u.received_at | time }}</div>
+  <div>Update id</div><div>{{ u.update_id }}</div>
+  <div>Type</div><div>{{ u.kind }}</div>
+  <div>From</div><div>{{ u.from_name or "" }} {% if u.from_id %}<span class="muted">({{ u.from_id }})</span>{% endif %}</div>
+  <div>Result</div><div>{{ status_badge(u.status) }}{% if u.handler_version %} handler v{{ u.handler_version }}{% endif %}{% if u.duration_ms is not none %}, {{ u.duration_ms }} ms{% endif %}</div>
+</div>
+<p><a class="button" href="/bots/{{ bot.id }}/handler?update={{ u.id }}">Test the handler on this update</a></p>
+
+{% if u.error %}
+<h2>Error</h2>
+<pre class="code error">{{ u.error }}</pre>
+{% endif %}
+
+<h2>Log</h2>
+{% if u.logs %}<pre class="code">{{ u.logs | join("\n") }}</pre>{% else %}<p class="muted">Nothing logged.</p>{% endif %}
+
+<h2>Bot API calls</h2>
+{% if u.api_calls %}
+<table class="table">
+  <thead><tr><th>Method</th><th>Parameters</th><th>Result</th></tr></thead>
+  <tbody>
+  {% for c in u.api_calls %}
+    <tr>
+      <td><code>{{ c.method }}</code></td>
+      <td><pre class="inline">{{ c.params | pretty }}</pre></td>
+      <td>{% if c.dry_run %}<span class="badge badge-paused">dry run</span>{% elif c.ok %}<span class="badge badge-ok">ok</span>{% else %}<span class="badge badge-error">failed</span> <span class="small">{{ c.error }}</span>{% endif %}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}<p class="muted">No Bot API calls.</p>{% endif %}
+
+<h2>Raw update</h2>
+<pre class="code">{{ u.raw | pretty }}</pre>
+{% endblock %}

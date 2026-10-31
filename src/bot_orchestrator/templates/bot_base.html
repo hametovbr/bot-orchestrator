@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% from "_macros.html" import bot_status %}
+{% block title %}@{{ bot.username }} · Bot Orchestrator{% endblock %}
+{% block content %}
+<div class="bot-head">
+  <div>
+    <a class="muted small" href="/">← All bots</a>
+    <h1>@{{ bot.username }} {{ bot_status(bot) }}</h1>
+    {% if bot.status_message %}<div class="flash flash-warning">{{ bot.status_message }}</div>{% endif %}
+  </div>
+</div>
+<nav class="tabs">
+  {% for key, label in [("updates", "Updates"), ("handler", "Handler"), ("console", "API console"), ("files", "Files"), ("settings", "Settings")] %}
+  <a href="/bots/{{ bot.id }}/{{ key }}" class="{% if tab == key %}active{% endif %}">{{ label }}</a>
+  {% endfor %}
+</nav>
+{% block tab %}{% endblock %}
+{% endblock %}

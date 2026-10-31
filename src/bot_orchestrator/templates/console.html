@@ -1,0 +1,48 @@
+{% extends "bot_base.html" %}
+{% block tab %}
+<section class="card">
+  <form id="console-form" class="stack">
+    <div class="row">
+      <label class="grow">Method
+        <input type="text" id="method" list="methods" value="getMe" required spellcheck="false" autocomplete="off">
+        <datalist id="methods">{% for m in methods %}<option value="{{ m }}">{% endfor %}</datalist>
+      </label>
+      <div class="presets">
+        {% for m in ["getMe", "getWebhookInfo", "getMyCommands"] %}
+        <button type="button" class="small" data-method="{{ m }}">{{ m }}</button>
+        {% endfor %}
+      </div>
+    </div>
+    <label>Parameters (JSON object)
+      <textarea id="params" class="mono" rows="6" spellcheck="false">{}</textarea>
+    </label>
+    <div><button class="primary" id="send">Send</button>
+      <span class="muted small">Requests go to the local Bot API server as this bot.
+        {% if bot.polling %}getUpdates is blocked while the bot is polling.{% endif %}</span></div>
+  </form>
+  <div id="console-result"></div>
+</section>
+
+<h2>History</h2>
+{% if history %}
+<table class="table">
+  <thead><tr><th>Time</th><th>Method</th><th>Parameters</th><th>Result</th><th></th></tr></thead>
+  <tbody>
+  {% for h in history %}
+    <tr>
+      <td class="nowrap small">{{ h.created_at | time }}</td>
+      <td><code>{{ h.method }}</code></td>
+      <td class="ellipsis mono small">{{ h.params }}</td>
+      <td>{% if h.ok %}<span class="badge badge-ok">ok</span>{% else %}<span class="badge badge-error">failed</span>{% endif %}</td>
+      <td class="right"><button type="button" class="small" data-load-method="{{ h.method }}" data-load-params="{{ h.params }}" data-response="{{ h.response }}">Open</button></td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}<p class="muted">No requests yet.</p>{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>window.BOT_ID = {{ bot.id }};</script>
+<script src="/static/console.js"></script>
+{% endblock %}

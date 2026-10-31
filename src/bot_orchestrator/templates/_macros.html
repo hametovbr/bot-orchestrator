@@ -1,0 +1,11 @@
+{% macro status_badge(status) -%}
+<span class="badge badge-{{ status }}">{{ status | replace("_", " ") }}</span>
+{%- endmacro %}
+
+{% macro bot_status(bot) -%}
+{% if bot.status == "running" and not bot.polling %}
+<span class="badge badge-error">stopped</span>
+{% else %}
+<span class="badge badge-{{ bot.status }}">{{ bot.status }}</span>
+{% endif %}
+{%- endmacro %}

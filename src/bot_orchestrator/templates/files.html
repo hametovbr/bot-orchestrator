@@ -1,0 +1,33 @@
+{% extends "bot_base.html" %}
+{% block tab %}
+<div class="toolbar">
+  <span class="crumbs">
+    <a href="/bots/{{ bot.id }}/files">{{ bot.id }}</a>
+    {% for c in crumbs %} / <a href="/bots/{{ bot.id }}/files?path={{ c.path | urlencode }}">{{ c.name }}</a>{% endfor %}
+  </span>
+  <span class="muted small">Bot folder total: {{ usage | size }}</span>
+</div>
+
+{% if not exists %}
+<p class="muted">This folder does not exist yet. Handlers create it when they save the first file.</p>
+{% elif entries %}
+<table class="table">
+  <thead><tr><th>Name</th><th class="num">Size</th><th>Modified</th><th></th></tr></thead>
+  <tbody>
+  {% for e in entries %}
+    <tr>
+      <td>{% if e.is_dir %}<a href="/bots/{{ bot.id }}/files?path={{ e.path | urlencode }}">📁 {{ e.name }}/</a>
+        {% else %}<a href="/bots/{{ bot.id }}/files/download?path={{ e.path | urlencode }}">{{ e.name }}</a>{% endif %}</td>
+      <td class="num nowrap">{% if not e.is_dir %}{{ e.size | size }}{% endif %}</td>
+      <td class="nowrap small">{{ e.modified | time }}</td>
+      <td class="right">
+        <form method="post" action="/bots/{{ bot.id }}/files/delete" data-confirm="Delete {{ e.name }}{% if e.is_dir %} and everything in it{% endif %}?">
+          <input type="hidden" name="path" value="{{ e.path }}"><button class="small danger">Delete</button>
+        </form>
+      </td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}<p class="muted">Empty folder.</p>{% endif %}
+{% endblock %}

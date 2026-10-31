@@ -1,0 +1,80 @@
+{% extends "bot_base.html" %}
+{% block tab %}
+<section class="card">
+  <h2>Polling</h2>
+  <div class="kv-grid">
+    <div>Bot id</div><div>{{ bot.id }}</div>
+    <div>Token</div><div><code>{{ bot.token_hint }}</code></div>
+    <div>Next update offset</div><div>{{ bot.update_offset }}</div>
+  </div>
+  {% if bot.status == "running" and bot.polling %}
+  <form method="post" action="/bots/{{ bot.id }}/pause"><button>Pause polling</button></form>
+  {% else %}
+  <form method="post" action="/bots/{{ bot.id }}/resume"><button class="primary">Start polling</button></form>
+  {% endif %}
+</section>
+
+<section class="card">
+  <h2>Allowed users</h2>
+  <p class="muted small">Numeric Telegram user ids, separated by commas. Updates from anyone else are logged as
+    <em>ignored</em> and never reach the handler. Leave empty to allow everyone.</p>
+  <form method="post" action="/bots/{{ bot.id }}/allowed-users" class="row">
+    <input type="text" name="allowed" value="{{ bot.allowed_users }}" placeholder="123456789, 987654321" class="grow">
+    <button>Save</button>
+  </form>
+</section>
+
+<section class="card">
+  <h2>Secrets</h2>
+  <p class="muted small">Encrypted at rest and passed to the handler as <code>ctx.secrets["NAME"]</code>. Values are never shown again.</p>
+  {% if secrets %}
+  <table class="table compact"><tbody>
+    {% for name in secrets %}
+    <tr><td><code>{{ name }}</code></td><td class="right">
+      <form method="post" action="/bots/{{ bot.id }}/secrets/delete" data-confirm="Delete secret {{ name }}?">
+        <input type="hidden" name="name" value="{{ name }}"><button class="small danger">Delete</button></form></td></tr>
+    {% endfor %}
+  </tbody></table>
+  {% endif %}
+  <form method="post" action="/bots/{{ bot.id }}/secrets" class="row">
+    <input type="text" name="name" placeholder="NAME" required pattern="[A-Za-z_][A-Za-z0-9_]*" spellcheck="false">
+    <input type="password" name="value" placeholder="value" required class="grow" autocomplete="off">
+    <button>Add or replace</button>
+  </form>
+</section>
+
+<section class="card">
+  <h2>Stored values</h2>
+  <p class="muted small">What the handler saved with <code>ctx.kv</code>.</p>
+  {% if kv %}
+  <table class="table compact"><tbody>
+    {% for row in kv %}
+    <tr><td><code>{{ row.key }}</code></td><td class="mono small ellipsis">{{ row.value }}</td>
+      <td class="small nowrap">{{ row.updated_at | time }}</td>
+      <td class="right"><form method="post" action="/bots/{{ bot.id }}/kv/delete">
+        <input type="hidden" name="key" value="{{ row.key }}"><button class="small danger">Delete</button></form></td></tr>
+    {% endfor %}
+  </tbody></table>
+  {% else %}<p class="muted">Nothing stored.</p>{% endif %}
+</section>
+
+<section class="card danger-zone">
+  <h2>Moving and removing</h2>
+  <div class="stack">
+    <form method="post" action="/bots/{{ bot.id }}/cloud-logout" class="row">
+      <button>Log out from the cloud Bot API</button>
+      <span class="muted small">Use if the bot still answers through api.telegram.org.</span>
+    </form>
+    <form method="post" action="/bots/{{ bot.id }}/local-logout" class="row"
+          data-confirm="Log the bot out of the local server? Polling stops. The cloud Bot API accepts it again in about 10 minutes.">
+      <button>Log out from the local server</button>
+      <span class="muted small">To move the bot back to the cloud Bot API.</span>
+    </form>
+    <form method="post" action="/bots/{{ bot.id }}/delete" class="row"
+          data-confirm="Remove @{{ bot.username }} from the orchestrator? Handler versions, logs, secrets and stored values are deleted. Files stay on disk.">
+      <button class="danger">Remove bot</button>
+      <span class="muted small">Does not log the bot out of anything.</span>
+    </form>
+  </div>
+</section>
+{% endblock %}

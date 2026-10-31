@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% from "_macros.html" import bot_status %}
+{% block content %}
+<h1>Bots</h1>
+
+{% if bots %}
+<table class="table">
+  <thead>
+    <tr><th>Bot</th><th>Status</th><th>Handler</th><th class="num">Updates 24h</th><th class="num">Errors 24h</th></tr>
+  </thead>
+  <tbody>
+  {% for bot in bots %}
+    <tr>
+      <td><a href="/bots/{{ bot.id }}/updates"><strong>@{{ bot.username }}</strong></a>
+        <div class="muted">{{ bot.first_name }}</div></td>
+      <td>{{ bot_status(bot) }}
+        {% if bot.status_message %}<div class="muted small">{{ bot.status_message }}</div>{% endif %}</td>
+      <td>{% if bot.active_version %}v{{ bot.active_version }}{% else %}<span class="muted">none</span>{% endif %}</td>
+      <td class="num">{{ bot.updates_24h }}</td>
+      <td class="num {% if bot.errors_24h %}text-error{% endif %}">{{ bot.errors_24h }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p class="muted">No bots yet. Add the first one below.</p>
+{% endif %}
+
+<section class="card">
+  <h2>Add a bot</h2>
+  <form method="post" action="/bots" class="stack">
+    <label>Bot token from @BotFather
+      <input type="password" name="token" required placeholder="123456789:AA…" autocomplete="off" spellcheck="false">
+    </label>
+    <label class="check">
+      <input type="checkbox" name="log_out_cloud" value="true" checked>
+      <span>Log the bot out of the cloud Bot API (api.telegram.org)
+        <span class="muted small block">Required the first time you move a bot to this server. Afterwards the cloud API
+        stops delivering its updates; moving back is possible 10 minutes after a local logOut.</span></span>
+    </label>
+    <div><button class="primary">Add bot</button></div>
+  </form>
+</section>
+{% endblock %}

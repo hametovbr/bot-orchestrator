@@ -1,0 +1,93 @@
+{% extends "bot_base.html" %}
+{% from "_macros.html" import status_badge %}
+{% block tab %}
+<form method="post" action="/bots/{{ bot.id }}/handler" id="save-form" class="stack">
+  <div class="toolbar">
+    <span>
+      {% if shown_version %}Editing version <strong>{{ shown_version }}</strong>
+        {% if shown_version == bot.active_version %}<span class="badge badge-ok">active</span>{% else %}<span class="badge badge-paused">not active</span>{% endif %}
+      {% else %}<strong>New handler</strong> <span class="muted">— nothing is saved yet</span>{% endif %}
+    </span>
+    <input type="text" name="comment" placeholder="What changed (optional)" maxlength="200" class="grow">
+    <button class="primary">Save and activate</button>
+  </div>
+  <div id="editor" class="editor"></div>
+  <textarea name="code" id="code" class="code-fallback" spellcheck="false">{{ code }}</textarea>
+</form>
+
+<div class="columns">
+  <section class="card">
+    <h2>Test run</h2>
+    <p class="muted small">Runs the code in the editor (saved or not) on a real update. In a dry run only
+      <code>get*</code> Bot API methods reach Telegram; everything else is recorded but not sent.</p>
+    <div class="stack">
+      <label>Update
+        <select id="test-update">
+          {% for u in recent %}
+          <option value="{{ u.id }}" {% if u.id == selected_update %}selected{% endif %}>{{ u.received_at | time }} · {{ u.kind }} · {{ (u.summary or "")[:60] }}</option>
+          {% endfor %}
+          <option value="json" {% if not recent %}selected{% endif %}>Custom JSON…</option>
+        </select>
+      </label>
+      <textarea id="test-json" class="mono {% if recent %}hidden{% endif %}" rows="8" spellcheck="false">{"update_id": 1, "message": {"message_id": 1, "date": 0, "chat": {"id": 1, "type": "private"}, "from": {"id": 1, "is_bot": false, "first_name": "Test"}, "text": "hello"}}</textarea>
+      <label class="check"><input type="checkbox" id="test-dry" checked> <span>Dry run</span></label>
+      <div><button type="button" id="test-run">Run</button></div>
+      <div id="test-result"></div>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>Versions</h2>
+    {% if versions %}
+    <table class="table compact">
+      <tbody>
+      {% for v in versions %}
+        <tr>
+          <td><a href="?version={{ v.version }}">v{{ v.version }}</a>
+            {% if v.version == bot.active_version %}<span class="badge badge-ok">active</span>{% endif %}</td>
+          <td class="muted small">{{ v.created_at | time }}<div>{{ v.comment }}</div></td>
+          <td class="right">{% if v.version != bot.active_version %}
+            <form method="post" action="/bots/{{ bot.id }}/handler/activate">
+              <input type="hidden" name="version" value="{{ v.version }}"><button class="small">Activate</button>
+            </form>{% endif %}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    {% if bot.active_version %}
+    <form method="post" action="/bots/{{ bot.id }}/handler/activate">
+      <input type="hidden" name="version" value="0">
+      <button class="small">Disable handler</button>
+    </form>
+    {% endif %}
+    {% else %}<p class="muted">No versions yet.</p>{% endif %}
+  </section>
+</div>
+
+<details class="card">
+  <summary><strong>Handler reference</strong></summary>
+  <p>Define <code>handle(update, ctx)</code> (sync or async). It runs in bot-runner for every update the bot
+    receives, in its own process, with a time limit.</p>
+  <table class="table compact">
+    <tbody>
+      <tr><td><code>update.message.text</code></td><td>Telegram fields as attributes; a missing field is <code>None</code>. <code>message.from_</code> is the sender. <code>update.to_dict()</code> gives the raw JSON.</td></tr>
+      <tr><td><code>await ctx.reply(text, **params)</code></td><td>Send a message to the chat of the update.</td></tr>
+      <tr><td><code>await ctx.api.send_document(chat_id=…, document=path)</code></td><td>Any Bot API method, snake_case or camelCase. A <code>Path</code> is sent as a local file (up to 2 GB).</td></tr>
+      <tr><td><code>await ctx.answer_callback(text)</code></td><td>Answer the callback query of the update.</td></tr>
+      <tr><td><code>await ctx.files.local_path(file_id)</code></td><td>Download a file through the local Bot API server and get its path on disk.</td></tr>
+      <tr><td><code>ctx.files.move(src, "inbox/name.pdf")</code></td><td>Move or <code>copy</code> a file into the bot folder; existing names get a <code>(1)</code> suffix. Also <code>write_text</code>, <code>write_bytes</code>, <code>read_text</code>, <code>list</code>, <code>path</code>, <code>safe_name</code>.</td></tr>
+      <tr><td><code>await ctx.kv.get(key, default)</code></td><td>Per-bot storage of JSON values; also <code>set</code> and <code>delete</code>.</td></tr>
+      <tr><td><code>ctx.secrets["NAME"]</code></td><td>Secrets from the Settings tab.</td></tr>
+      <tr><td><code>ctx.log(...)</code>, <code>print(...)</code></td><td>Write to the update log.</td></tr>
+      <tr><td><code>await ctx.http.get(url)</code></td><td>An <code>httpx.AsyncClient</code> for outside requests.</td></tr>
+      <tr><td><code>await ctx.shell("yt-dlp", url)</code></td><td>Run a program in the bot folder; returns <code>returncode</code>, <code>stdout</code>, <code>stderr</code>.</td></tr>
+    </tbody>
+  </table>
+</details>
+{% endblock %}
+
+{% block scripts %}
+<script>window.BOT_ID = {{ bot.id }};</script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.52.2/min/vs/loader.min.js"></script>
+<script src="/static/handler.js"></script>
+{% endblock %}

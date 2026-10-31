@@ -40,63 +40,129 @@ develops.
   (`deleteWebhook` + `logOut` on `api.telegram.org`), pause, delete, migrate back.
 - One `getUpdates` long-polling loop per active bot. Adding a bot starts a new
   loop without restarting any container.
-- Routing: picks a handler for each update by command, regex, content type,
-  callback data or a catch-all route, in priority order.
+- Dispatch: drops updates from users outside the bot's allow list and sends the
+  rest to the active handler version, up to `BOT_CONCURRENCY` at a time per bot.
+  (Routing to several handlers is planned.)
 - Update log: raw update JSON, matched route, duration, error, handler logs.
 - Bot API console with request history.
 - Storage: SQLite to start with.
 
 ### bot-runner
 
-- Receives `(bot, update, handler version)` from the orchestrator and runs the
-  handler with a timeout.
-- Loads handler code by version without restarting.
+- Receives the update, the bot and the handler code from the orchestrator and
+  runs it in a fresh process with a time and memory limit, so new versions need
+  no restart.
 - Provides the handler SDK (`ctx`), see below.
-- Background queue for long tasks such as downloads.
-- No Docker socket, CPU/RAM limits, write access only to the bot files folder.
+- No Docker socket, CPU/RAM limits on the container, file helpers scoped to the
+  bot folder.
 
 ### telegram-bot-api
 
-Stock image (for example `aiogram/telegram-bot-api`) running with `--local`.
-Never exposed outside the internal Docker network.
+Stock image `aiogram/telegram-bot-api` running with `--local`. It publishes no
+ports. All three images run as uid 101, so they can share files on the volumes.
 
-## Handler SDK (draft)
+## Handler SDK
+
+A handler is a module that defines `handle(update, ctx)`, sync or async. Each run
+happens in a fresh process inside bot-runner.
 
 ```python
+import datetime as dt
+
+
 async def handle(update, ctx):
-    doc = update.message.document
-    path = await ctx.files.local_path(doc.file_id)
-    saved = ctx.files.move(path, f"inbox/{update.message.date:%Y-%m-%d}_{doc.file_name}")
-    await ctx.reply(f"Saved: {saved}")
+    msg = update.message
+    if msg and msg.document:
+        day = dt.date.fromtimestamp(msg.date).isoformat()
+        path = await ctx.files.local_path(msg.document.file_id)
+        saved = ctx.files.move(path, f"inbox/{day}_{ctx.files.safe_name(msg.document.file_name)}")
+        await ctx.reply(f"Saved: {saved.name}")
 ```
 
 | Member | Purpose |
 | --- | --- |
-| `ctx.reply()`, `ctx.api.<method>()` | Bot API calls on behalf of the current bot |
-| `ctx.files` | Shared volume access, scoped to the bot's folder |
-| `ctx.kv` | Per-bot key-value storage |
-| `ctx.secrets` | Secrets configured in the UI |
-| `ctx.log` | Execution log shown in the update log |
-| `ctx.http`, `ctx.shell()` | HTTP requests and external tools such as `yt-dlp` |
-| `ctx.bots["name"]` | Bot API calls on behalf of another managed bot |
-| `ctx.userbot` | Conversations with third-party bots via a user account |
+| `update` | Telegram fields as attributes, `None` when missing; `message.from_` is the sender; `update.to_dict()` is the raw JSON |
+| `await ctx.reply(text, **params)` | `sendMessage` to the chat of the update |
+| `await ctx.api.<method>(**params)` | Any Bot API method, snake_case or camelCase; a `Path` value is sent as a local `file://` URI |
+| `await ctx.answer_callback(text)` | `answerCallbackQuery` for the current update |
+| `ctx.chat_id`, `ctx.bot` | Chat of the update; `id` and `username` of the bot |
+| `await ctx.files.local_path(file_id)` | `getFile` through the local server, returns the absolute path |
+| `ctx.files.move/copy(src, dst)` | Into the bot folder; existing names get a ` (1)` suffix unless `overwrite=True` |
+| `ctx.files.write_text/write_bytes/read_text/read_bytes/list/exists/path/safe_name` | File helpers scoped to the bot folder |
+| `await ctx.kv.get(key, default)`, `set`, `delete` | Per-bot JSON storage kept by the orchestrator |
+| `ctx.secrets[name]` | Secrets from the Settings tab |
+| `ctx.log(...)`, `print(...)` | Lines in the update log |
+| `ctx.http` | `httpx.AsyncClient` |
+| `await ctx.shell(*args, timeout=, cwd=)` | Run a program (default cwd: the bot folder) |
 
-## Data model (draft)
+Planned: `ctx.bots["name"]` (another managed bot) and `ctx.userbot`
+(conversations with third-party bots through a user account).
+
+## Orchestrator–runner contract
+
+### `POST {RUNNER_URL}/run`
+
+Header `X-Runner-Secret: <RUNNER_SECRET>`.
+
+```json
+{
+  "run_id": "hex string",
+  "bot": {"id": 123, "username": "my_bot", "token": "123:ABC..."},
+  "code": "async def handle(update, ctx): ...",
+  "version": 3,
+  "update": {"update_id": 1, "message": {}},
+  "secrets": {"NAME": "value"},
+  "dry_run": false,
+  "timeout": null
+}
+```
+
+Response:
+
+```json
+{
+  "status": "ok | error | timeout",
+  "error": "traceback or null",
+  "logs": ["line"],
+  "api_calls": [{"method": "sendMessage", "params": {}, "ok": true, "dry_run": false}],
+  "duration_ms": 42
+}
+```
+
+Tokens are masked in `error`, `logs` and `api_calls`. Logs are capped at 500
+lines and API calls at 200 per run.
+
+### Internal API of the orchestrator
+
+Used by `ctx.kv`; requires the same `X-Runner-Secret` header.
+
+| Request | Effect |
+| --- | --- |
+| `GET /internal/kv/{bot_id}/{key}` | `{"value": ...}` or 404 |
+| `PUT /internal/kv/{bot_id}/{key}` with `{"value": ...}` | Store a JSON value |
+| `DELETE /internal/kv/{bot_id}/{key}` | Remove a key |
+
+## Data model
 
 | Table | Contents |
 | --- | --- |
-| `bots` | Encrypted token, username, mode, update offset, allowed users, status |
-| `handlers`, `handler_versions` | Handler code, version number, active version |
-| `routes` | Bot, filter type, pattern, priority, handler |
-| `updates` | Raw update, matched route, duration, error, logs (kept N days) |
-| `kv`, `secrets`, `schedules`, `userbots` | State, keys, cron jobs, Telethon sessions |
+| `bots` | Encrypted token, username, status, update offset, allowed users, active handler version |
+| `handler_versions` | Code and comment of every saved version |
+| `updates` | Raw update, sender, summary, status, handler version, duration, error, logs, API calls (kept `UPDATE_RETENTION_DAYS`) |
+| `console_history` | Last 200 API console calls per bot |
+| `secrets` | Encrypted secret values |
+| `kv` | JSON values stored by handlers |
+
+Update statuses: `pending`, `ok`, `error`, `timeout`, `dispatch_error` (the runner
+could not be reached), `no_handler`, `ignored` (sender not in allowed users).
 
 ## Roadmap
 
-1. **MVP:** add bot with migration, polling, update log, API console, one
-   handler per bot with an editor, `ctx.reply/api/files/kv/secrets`, file browser.
-2. **Stage 2:** routes and multiple handlers, replaying logged updates, handler
-   versions, background queue with `yt-dlp`, user-bots, schedules, error
-   notifications.
+1. **MVP (done):** add bot with cloud logOut, polling, update log, API console,
+   one handler per bot with an editor, versions and test runs,
+   `ctx.reply/api/files/kv/secrets/shell`, file browser, allowed users.
+2. **Stage 2:** routes and multiple handlers per bot, background queue for long
+   tasks, user-bots, schedules, error notifications in Telegram, editor
+   autocompletion for the SDK.
 3. **Stage 3:** shared modules, Git sync for handlers, AI assistant in the
    editor, metrics, webhook mode.
