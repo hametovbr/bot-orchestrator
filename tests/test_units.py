@@ -54,3 +54,29 @@ def test_describe_document_and_callback():
 def test_parse_allowed():
     assert parse_allowed("1, 2;3 x") == {1, 2, 3}
     assert parse_allowed("") == set()
+
+
+async def test_notifications_work_right_after_boot():
+    """The first message must go out even when the monotonic clock is still small."""
+    from bot_orchestrator import notify
+
+    sent = []
+
+    class FakeDb:
+        async def get_setting(self, key, default=None):
+            return {"notify_bot_id": 1, "notify_chat_id": 2}.get(key, default)
+
+    class FakeOrchestrator:
+        db = FakeDb()
+
+    notifier = notify.Notifier(FakeOrchestrator())
+
+    async def deliver(bot_id, chat_id, text):
+        sent.append(text)
+
+    notifier.deliver = deliver
+    clock = iter([5.0, 6.0, 700.0])
+    notifier.clock = lambda: next(clock)
+    for _ in range(3):
+        await notifier.send("handler_errors", "k", "boom")
+    assert sent == ["boom", "boom\n(+1 more like this in the last 10 min)"]

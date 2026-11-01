@@ -33,7 +33,8 @@ class Notifier:
     def __init__(self, orchestrator: Orchestrator):
         self._o = orchestrator
         # key -> (time of the last sent message, messages suppressed since)
-        self._recent: dict[str, tuple[float, int]] = {}
+        self._recent: dict[str, tuple[float | None, int]] = {}
+        self.clock = time.monotonic
 
     async def config(self) -> dict[str, Any]:
         db = self._o.db
@@ -51,9 +52,11 @@ class Notifier:
                 return
             if not config["notify_bot_id"] or not config["notify_chat_id"]:
                 return
-            now = time.monotonic()
-            last, suppressed = self._recent.get(key, (0.0, 0))
-            if now - last < THROTTLE_SECONDS:
+            now = self.clock()
+            # No entry means "never sent". (Comparing with 0 would swallow every message
+            # while the host's monotonic clock is young, e.g. just after a reboot.)
+            last, suppressed = self._recent.get(key, (None, 0))
+            if last is not None and now - last < THROTTLE_SECONDS:
                 self._recent[key] = (last, suppressed + 1)
                 return
             if suppressed:
