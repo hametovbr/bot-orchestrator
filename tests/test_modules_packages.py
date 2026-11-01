@@ -208,7 +208,8 @@ def test_packages_save_and_status(logged_in, fake):
 def test_sync_reinstalls_when_runner_lost_packages(logged_in, fake):
     o = logged_in.orchestrator
     db_call(logged_in, o.db.set_setting, "packages_requirements", "pillow")
-    assert db_call(logged_in, o.packages.sync) is True, "runner has nothing; install"
+    # The maintenance loop may sync first; either way the list is installed exactly once.
+    db_call(logged_in, o.packages.sync)
     assert fake.package_installs == ["pillow"]
     assert db_call(logged_in, o.packages.sync) is False, "already in sync"
     # A failed install for the same list is not retried in a loop.
