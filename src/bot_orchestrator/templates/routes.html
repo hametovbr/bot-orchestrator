@@ -1,0 +1,67 @@
+{% extends "bot_base.html" %}
+{% from "_macros.html" import handler_options %}
+{% block tab %}
+<p class="muted small">Every update goes through the routes from top to bottom; the first enabled match runs its handler.
+  Drag rows to change the order.</p>
+
+{% if routes %}
+<table class="table" id="routes">
+  <thead><tr><th></th><th>#</th><th>Condition</th><th>Handler</th><th>Description</th><th>On</th><th></th></tr></thead>
+  <tbody>
+  {% for r in routes %}
+    <tr draggable="true" data-id="{{ r.id }}" class="{% if not r.enabled %}disabled{% endif %}">
+      <td class="drag" title="Drag to reorder">⋮⋮</td>
+      <td class="num pos">{{ loop.index }}</td>
+      <td><span class="muted small">{{ kinds[r.kind] }}</span><div><code>{{ r | route_pattern }}</code></div></td>
+      <td><a href="/bots/{{ bot.id }}/handlers/{{ r.handler_id }}">{{ r.handler_name }}</a></td>
+      <td class="small">{{ r.description }}</td>
+      <td><form method="post" action="/bots/{{ bot.id }}/routes/{{ r.id }}/toggle">
+        <button class="small toggle {% if r.enabled %}on{% endif %}" title="Enable or disable">{{ "on" if r.enabled else "off" }}</button></form></td>
+      <td class="right nowrap">
+        <button type="button" class="small move" data-dir="-1" title="Move up" aria-label="Move up">↑</button>
+        <button type="button" class="small move" data-dir="1" title="Move down" aria-label="Move down">↓</button>
+        <a class="button small" href="/bots/{{ bot.id }}/routes/{{ r.id }}">Edit</a>
+      </td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+<div class="row space-top">
+  <form method="post" action="/bots/{{ bot.id }}/routes-commands"
+        data-confirm="Replace the bot's command menu in Telegram with the enabled command routes?">
+    <button class="small">Publish commands to the bot menu</button>
+  </form>
+  <span class="muted small">Sends enabled command routes to Telegram with setMyCommands; the description becomes the menu text.</span>
+</div>
+{% else %}
+<p class="muted">No routes: updates are logged but no handler runs.{% if not handlers %} Create a <a href="/bots/{{ bot.id }}/handlers">handler</a> first.{% endif %}</p>
+{% endif %}
+
+{% if recent and routes %}
+<section class="card">
+  <h2>Which route matches?</h2>
+  <div class="row">
+    <select id="match-update" class="grow">
+      {% for u in recent %}
+      <option value="{{ u.id }}">{{ u.received_at | time }} · {{ u.kind }} · {{ (u.summary or "")[:70] }}</option>
+      {% endfor %}
+    </select>
+    <button type="button" id="match-run">Check</button>
+  </div>
+  <p id="match-result" class="space-top"></p>
+</section>
+{% endif %}
+
+{% if handlers %}
+<section class="card">
+  <h2>Add a route</h2>
+  {% set action = "/bots/" ~ bot.id ~ "/routes" %}
+  {% include "_route_form.html" %}
+</section>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>window.BOT_ID = {{ bot.id }}; window.PATTERN_HELP = {{ help | tojson }};</script>
+<script src="/static/routes.js"></script>
+{% endblock %}

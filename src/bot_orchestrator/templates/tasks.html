@@ -1,0 +1,39 @@
+{% extends "bot_base.html" %}
+{% from "_macros.html" import status_badge %}
+{% block tab %}
+<form method="get" class="toolbar">
+  <label>Status
+    <select name="status" onchange="this.form.submit()">
+      <option value="">all</option>
+      {% for s in statuses %}
+      <option value="{{ s }}" {% if s == status %}selected{% endif %}>{{ s }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <a class="button" href="">Refresh</a>
+  {% if active %}<span class="muted small" id="auto-refresh" data-seconds="3">{{ active }} active · refreshing</span>{% endif %}
+</form>
+
+{% if tasks %}
+<table class="table">
+  <thead><tr><th>#</th><th>Task</th><th>Handler</th><th>Created</th><th>Status</th><th class="num">Time</th></tr></thead>
+  <tbody>
+  {% for t in tasks %}
+    <tr class="clickable" data-href="/bots/{{ bot.id }}/tasks/{{ t.id }}">
+      <td class="num"><a href="/bots/{{ bot.id }}/tasks/{{ t.id }}">{{ t.id }}</a></td>
+      <td class="ellipsis">{{ t.title }}<div class="muted small"><code>{{ t.entry }}()</code></div></td>
+      <td class="nowrap">{{ t.handler_name or "" }}{% if t.version %} <span class="muted small">v{{ t.version }}</span>{% endif %}</td>
+      <td class="small nowrap">{{ t.created_at | time }}</td>
+      <td>{{ status_badge(t.status) }}
+        {% if t.status == "running" and t.progress %}<div class="small ellipsis">{{ t.progress }}</div>{% endif %}
+        {% if t.error and t.status != "cancelled" %}<div class="text-error small ellipsis">{{ t.error.strip().splitlines()[-1] }}</div>{% endif %}</td>
+      <td class="num nowrap">{{ t.duration_ms | duration }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p class="muted">No background tasks{% if status %} with this status{% endif %}. Handlers start them with
+  <code>await ctx.background(func, ...)</code>.</p>
+{% endif %}
+{% endblock %}

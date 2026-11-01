@@ -1,0 +1,17 @@
+{% extends "bot_base.html" %}
+{% block tab %}
+<p><a class="muted small" href="/bots/{{ bot.id }}/schedules">← Schedules</a></p>
+<section class="card">
+  <h2>Edit schedule</h2>
+  {% set action = "/bots/" ~ bot.id ~ "/schedules/" ~ schedule.id %}
+  {% include "_schedule_form.html" %}
+</section>
+<form method="post" action="/bots/{{ bot.id }}/schedules/{{ schedule.id }}/delete" data-confirm="Delete the schedule {{ schedule.name }}?">
+  <button class="danger">Delete schedule</button>
+</form>
+{% endblock %}
+
+{% block scripts %}
+<script>window.BOT_ID = {{ bot.id }};</script>
+<script src="/static/schedules.js"></script>
+{% endblock %}

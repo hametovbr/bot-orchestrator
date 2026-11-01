@@ -9,6 +9,12 @@
     return editor ? editor.getValue() : textarea.value;
   }
 
+  // Warn before leaving with unsaved changes.
+  let saved = textarea.value;
+  window.addEventListener("beforeunload", function (event) {
+    if (currentCode() !== saved) event.preventDefault();
+  });
+
   if (window.require && window.require.config) {
     window.require.config({
       paths: { vs: "https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.52.2/min/vs" },
@@ -28,6 +34,7 @@
       });
       textarea.classList.add("hidden");
       editorBox.classList.add("ready");
+      if (window.registerSdkHints) window.registerSdkHints(monaco);
       editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, function () {
         document.getElementById("save-form").requestSubmit();
       });
@@ -36,6 +43,7 @@
 
   document.getElementById("save-form").addEventListener("submit", function () {
     textarea.value = currentCode();
+    saved = textarea.value;
   });
 
   const select = document.getElementById("test-update");
@@ -56,7 +64,7 @@
     button.disabled = true;
     result.innerHTML = '<p class="muted">Running…</p>';
     try {
-      result.innerHTML = renderRunResult(await postJson(`/bots/${window.BOT_ID}/handler/test`, body));
+      result.innerHTML = renderRunResult(await postJson(`/bots/${window.BOT_ID}/handlers/${window.HANDLER_ID}/test`, body));
     } catch (err) {
       result.innerHTML = `<div class="flash flash-error">${escapeHtml(err.message)}</div>`;
     } finally {

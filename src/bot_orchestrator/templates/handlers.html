@@ -1,0 +1,44 @@
+{% extends "bot_base.html" %}
+{% block tab %}
+{% if handlers %}
+<table class="table">
+  <thead><tr><th>Handler</th><th>Active version</th><th class="num">Routes</th><th class="num">Schedules</th><th>Last saved</th></tr></thead>
+  <tbody>
+  {% for h in handlers %}
+    <tr class="clickable" data-href="/bots/{{ bot.id }}/handlers/{{ h.id }}">
+      <td><a href="/bots/{{ bot.id }}/handlers/{{ h.id }}"><strong>{{ h.name }}</strong></a></td>
+      <td>v{{ h.active_version }}{% if h.latest_version != h.active_version %} <span class="muted small">(latest v{{ h.latest_version }})</span>{% endif %}</td>
+      <td class="num {% if not h.routes and not h.schedules %}muted{% endif %}">{{ h.routes }}</td>
+      <td class="num">{{ h.schedules }}</td>
+      <td class="small nowrap">{{ h.updated_at | time }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+<p class="muted small">A handler runs only when a route or a schedule points to it. Set the order on the
+  <a href="/bots/{{ bot.id }}/routes">Routes</a> tab.</p>
+{% else %}
+<p class="muted">No handlers yet. Create one from a template below; it can be changed freely afterwards.</p>
+{% endif %}
+
+<section class="card">
+  <h2>New handler</h2>
+  <form method="post" action="/bots/{{ bot.id }}/handlers" class="stack">
+    <div class="row">
+      <label class="grow">Name
+        <input type="text" name="name" required pattern="[A-Za-z0-9_\-]{1,40}" placeholder="save_files" spellcheck="false">
+      </label>
+      <label class="grow">Start from
+        <select name="template">
+          {% for key, t in templates.items() %}
+          <option value="{{ key }}">{{ t.title }}</option>
+          {% endfor %}
+        </select>
+      </label>
+    </div>
+    <label class="check"><input type="checkbox" name="add_route" value="true" checked>
+      <span>Add the template's route (for example, a link regex for the download template)</span></label>
+    <div><button class="primary">Create</button></div>
+  </form>
+</section>
+{% endblock %}

@@ -1,0 +1,34 @@
+{% extends "bot_base.html" %}
+{% from "_macros.html" import status_badge, api_calls %}
+{% block tab %}
+<p><a class="muted small" href="/bots/{{ bot.id }}/tasks">← Tasks</a></p>
+<h2>#{{ t.id }} {{ t.title }} {{ status_badge(t.status) }}</h2>
+{% if t.status in ("queued", "running") %}<span id="auto-refresh" data-seconds="2" class="muted small">refreshing</span>{% endif %}
+<div class="kv-grid">
+  <div>Function</div><div><code>{{ t.entry }}(ctx{% for a in t.args %}, {{ a | tojson }}{% endfor %}{% for k, v in t.kwargs.items() %}, {{ k }}={{ v | tojson }}{% endfor %})</code></div>
+  <div>Handler</div><div>{% if t.handler_id %}<a href="/bots/{{ bot.id }}/handlers/{{ t.handler_id }}">{{ t.handler_name }}</a>{% else %}{{ t.handler_name or "test run" }}{% endif %}{% if t.version %} v{{ t.version }}{% else %} <span class="muted">(unsaved code)</span>{% endif %}</div>
+  <div>Started by</div><div>{% if t.update_row %}<a href="/bots/{{ bot.id }}/updates/{{ t.update_row }}">update log entry</a>{% else %}<span class="muted">unknown</span>{% endif %}</div>
+  <div>Created</div><div>{{ t.created_at | time }}</div>
+  {% if t.started_at %}<div>Started</div><div>{{ t.started_at | time }}</div>{% endif %}
+  {% if t.finished_at %}<div>Finished</div><div>{{ t.finished_at | time }}{% if t.duration_ms is not none %} ({{ t.duration_ms | duration }}){% endif %}</div>{% endif %}
+  {% if t.progress %}<div>Progress</div><div>{{ t.progress }}</div>{% endif %}
+</div>
+<div class="row">
+  {% if t.status in ("queued", "running") %}
+  <form method="post" action="/bots/{{ bot.id }}/tasks/{{ t.id }}/cancel"><button class="danger">Cancel</button></form>
+  {% else %}
+  <form method="post" action="/bots/{{ bot.id }}/tasks/{{ t.id }}/retry"><button>Run again</button></form>
+  {% endif %}
+</div>
+
+{% if t.error and t.status != "cancelled" %}
+<h2>Error</h2>
+<pre class="code error">{{ t.error }}</pre>
+{% endif %}
+
+<h2>Log</h2>
+{% if t.logs %}<pre class="code">{{ t.logs | join("\n") }}</pre>{% else %}<p class="muted">{% if t.status in ("queued", "running") %}The log appears when the task finishes.{% else %}Nothing logged.{% endif %}</p>{% endif %}
+
+<h2>Bot API calls</h2>
+{{ api_calls(t.api_calls, bot) }}
+{% endblock %}

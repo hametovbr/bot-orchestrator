@@ -1,7 +1,6 @@
 # Architecture
 
-This document describes the target design. It will change as the project
-develops.
+This document describes the current design. It changes as the project develops.
 
 ## Principles
 
@@ -9,9 +8,12 @@ develops.
   consists of the same three services, however many bots are configured.
 - **One local Bot API server for all bots.** The bot token is part of every
   request URL, so a single `telegram-bot-api` instance serves any number of bots.
-- **User code never runs inside the orchestrator.** Handlers run in
-  `bot-runner`, so a broken or hanging handler cannot take down the panel or
-  other bots.
+- **User code never runs inside the orchestrator.** Handlers and background
+  tasks run in `bot-runner`, each in its own process, so a broken or hanging
+  handler cannot take down the panel or other bots.
+- **The orchestrator owns the state; the runner is stateless.** Routes, handler
+  versions, tasks, schedules and logs live in the orchestrator's database. The
+  runner can be restarted at any time.
 - **Same file paths everywhere.** The local Bot API data directory is mounted
   at the same path in every container, so a path returned by `getFile` can be
   opened directly by handler code.
@@ -35,68 +37,113 @@ develops.
 
 ### bot-orchestrator
 
-- Web UI and REST API for the UI.
+- Web UI. Bots, and per bot: updates, routes, handlers, tasks, schedules, API
+  console, files, settings. Global settings: notifications and storage.
 - Bot lifecycle: validate token (`getMe`), migrate to the local server
   (`deleteWebhook` + `logOut` on `api.telegram.org`), pause, delete, migrate back.
-- One `getUpdates` long-polling loop per active bot. Adding a bot starts a new
+- One `getUpdates` long-polling loop per running bot. Adding a bot starts a new
   loop without restarting any container.
-- Dispatch: drops updates from users outside the bot's allow list and sends the
-  rest to the active handler version, up to `BOT_CONCURRENCY` at a time per bot.
-  (Routing to several handlers is planned.)
-- Update log: raw update JSON, matched route, duration, error, handler logs.
-- Bot API console with request history.
-- Storage: SQLite to start with.
+- Routing: drops updates from users outside the bot's allow list, then checks the
+  bot's routes in order; the first enabled match runs its handler's active
+  version, up to `BOT_CONCURRENCY` at a time per bot.
+- Background tasks: a queue in the database, run `TASK_CONCURRENCY` at a time
+  across all bots, cancellable from the UI or from handler code.
+- Schedules: a five-field cron per schedule in the `TZ` timezone, checked at the
+  start of every minute. Runs missed while the orchestrator was down are
+  skipped.
+- Notifications: failures are sent to one chat through one of the managed bots,
+  at most once per 10 minutes for the same problem.
+- Maintenance, hourly: prunes the update log and finished tasks older than
+  `UPDATE_RETENTION_DAYS`, and deletes files the Bot API server downloaded more
+  than `CACHE_RETENTION_HOURS` ago. Every 10 minutes it checks disk space.
+- Storage: SQLite with versioned schema migrations (`PRAGMA user_version`).
 
 ### bot-runner
 
-- Receives the update, the bot and the handler code from the orchestrator and
-  runs it in a fresh process with a time and memory limit, so new versions need
-  no restart.
-- Provides the handler SDK (`ctx`), see below.
+- Runs every handler call and background task in a fresh Python process with a
+  time limit (`HANDLER_TIMEOUT`, `TASK_TIMEOUT`) and a memory limit, so new
+  versions need no restart.
+- Separate concurrency limits for handlers and tasks, so long downloads never
+  block replies.
+- Kills a running job on request (`POST /cancel/{run_id}`).
+- Provides the handler SDK (`ctx`), see below. The image includes `yt-dlp` and
+  `ffmpeg`.
 - No Docker socket, CPU/RAM limits on the container, file helpers scoped to the
-  bot folder.
+  bot folder; a shared read-only folder (`SHARED_READ_DIR`, e.g. cookies files).
 
 ### telegram-bot-api
 
 Stock image `aiogram/telegram-bot-api` running with `--local`. It publishes no
 ports. All three images run as uid 101, so they can share files on the volumes.
 
+## Routes
+
+A route is a condition and a handler. Updates go through the routes from top to
+bottom; the first enabled match wins. Updates that match nothing are logged with
+the status `no_route`.
+
+| Condition | Pattern | Matches |
+| --- | --- | --- |
+| `command` | `start` | Text `/start`, `/start args`, `/start@this_bot` |
+| `regex` | `https?://\S+` | `re.search` in the message text or caption |
+| `content` | `document, photo` | Messages with any of these fields (`text`, `document`, `photo`, `video`, `audio`, `voice`, ...) |
+| `callback` | `cancel:` | Button presses whose `callback_data` starts with the prefix (empty: any button) |
+| `update` | `edited_message, schedule` | Update types |
+| `any` | — | Everything |
+
+Command routes can be published to the bot menu with `setMyCommands`; the route
+description becomes the menu text.
+
 ## Handler SDK
 
-A handler is a module that defines `handle(update, ctx)`, sync or async. Each run
-happens in a fresh process inside bot-runner.
+A handler is code that defines `handle(update, ctx)`, sync or async. The same
+code may define functions to run as background tasks.
 
 ```python
-import datetime as dt
+import re
+
+URL = re.compile(r"https?://\S+")
 
 
 async def handle(update, ctx):
-    msg = update.message
-    if msg and msg.document:
-        day = dt.date.fromtimestamp(msg.date).isoformat()
-        path = await ctx.files.local_path(msg.document.file_id)
-        saved = ctx.files.move(path, f"inbox/{day}_{ctx.files.safe_name(msg.document.file_name)}")
-        await ctx.reply(f"Saved: {saved.name}")
+    found = URL.search(update.message.text or "")
+    if found:
+        await ctx.background(fetch, found.group(0), title=found.group(0))
+
+
+async def fetch(ctx, url):
+    result = await ctx.download(url)
+    await ctx.reply_file(result.path, caption=result.title)
 ```
 
 | Member | Purpose |
 | --- | --- |
 | `update` | Telegram fields as attributes, `None` when missing; `message.from_` is the sender; `update.to_dict()` is the raw JSON |
-| `await ctx.reply(text, **params)` | `sendMessage` to the chat of the update |
+| `update.schedule` | In scheduled runs: `id`, `name`, `cron`, `time`, `manual`, `chat` |
+| `await ctx.reply(text, **params)` | `sendMessage` to the chat of the update (or of the schedule) |
+| `await ctx.reply_file(path, caption=None, kind="auto")` | `sendVideo`/`sendAudio`/`sendPhoto`/`sendAnimation`/`sendDocument` by extension |
 | `await ctx.api.<method>(**params)` | Any Bot API method, snake_case or camelCase; a `Path` value is sent as a local `file://` URI |
 | `await ctx.answer_callback(text)` | `answerCallbackQuery` for the current update |
-| `ctx.chat_id`, `ctx.bot` | Chat of the update; `id` and `username` of the bot |
+| `ctx.chat_id`, `ctx.bot`, `ctx.handler` | Chat of the update; this bot; the running handler |
+| `task_id = await ctx.background(func, *args, title=None, **kwargs)` | Queue `func(ctx, *args, **kwargs)` as a background task; arguments travel as JSON |
+| `ctx.task`, `await ctx.progress(text)` | Inside a task: its `id` and `title`; a progress line for the UI |
+| `await ctx.tasks.get(id)`, `await ctx.tasks.cancel(id)` | Status of a task of this bot, or cancel it |
+| `await ctx.download(url, folder="downloads", ...)` | yt-dlp download with a progress message in the chat; returns `path`, `title`, `size`, `info`; raises `DownloadFailed` |
 | `await ctx.files.local_path(file_id)` | `getFile` through the local server, returns the absolute path |
 | `ctx.files.move/copy(src, dst)` | Into the bot folder; existing names get a ` (1)` suffix unless `overwrite=True` |
-| `ctx.files.write_text/write_bytes/read_text/read_bytes/list/exists/path/safe_name` | File helpers scoped to the bot folder |
+| `ctx.files.write_text/write_bytes/read_text/read_bytes/list/exists/path/readable/safe_name` | File helpers scoped to the bot folder |
 | `await ctx.kv.get(key, default)`, `set`, `delete` | Per-bot JSON storage kept by the orchestrator |
 | `ctx.secrets[name]` | Secrets from the Settings tab |
-| `ctx.log(...)`, `print(...)` | Lines in the update log |
+| `ctx.log(...)`, `print(...)` | Lines in the log |
 | `ctx.http` | `httpx.AsyncClient` |
 | `await ctx.shell(*args, timeout=, cwd=)` | Run a program (default cwd: the bot folder) |
 
-Planned: `ctx.bots["name"]` (another managed bot) and `ctx.userbot`
-(conversations with third-party bots through a user account).
+`ctx.download` options: `audio_only` (MP3), `format` (yt-dlp format string;
+default best video up to 1080p plus audio), `max_size_mb` (default 2000),
+`cookies` (a Netscape cookies file, e.g. in the shared folder), `filename`
+(yt-dlp output template), `status` (keep a status message in the chat),
+`messages` (status texts, e.g. in another language), `options` (extra yt-dlp
+options).
 
 ## Orchestrator–runner contract
 
@@ -107,9 +154,16 @@ Header `X-Runner-Secret: <RUNNER_SECRET>`.
 ```json
 {
   "run_id": "hex string",
+  "kind": "handler | task",
   "bot": {"id": 123, "username": "my_bot", "token": "123:ABC..."},
   "code": "async def handle(update, ctx): ...",
   "version": 3,
+  "handler": {"id": 7, "name": "download", "version": 3},
+  "entry": "handle",
+  "args": [],
+  "kwargs": {},
+  "task": {"id": 12, "title": "https://..."},
+  "origin": {"update_row": 345},
   "update": {"update_id": 1, "message": {}},
   "secrets": {"NAME": "value"},
   "dry_run": false,
@@ -117,11 +171,16 @@ Header `X-Runner-Secret: <RUNNER_SECRET>`.
 }
 ```
 
+`kind: "handler"` calls `handle(update, ctx)`; `kind: "task"` calls
+`entry(ctx, *args, **kwargs)` with `ctx.task` set. `origin` is passed back
+unchanged when the run starts a task. `handler.version` is 0 for unsaved code
+from a test run.
+
 Response:
 
 ```json
 {
-  "status": "ok | error | timeout",
+  "status": "ok | error | timeout | cancelled",
   "error": "traceback or null",
   "logs": ["line"],
   "api_calls": [{"method": "sendMessage", "params": {}, "ok": true, "dry_run": false}],
@@ -130,39 +189,64 @@ Response:
 ```
 
 Tokens are masked in `error`, `logs` and `api_calls`. Logs are capped at 500
-lines and API calls at 200 per run.
+lines and API calls at 200 per run. `ctx.background` appears in `api_calls` as
+the pseudo-method `background` with the new `task_id`.
+
+### `POST {RUNNER_URL}/cancel/{run_id}`
+
+Kills the process of a running job; its `/run` call then returns `cancelled`.
+Answers `{"cancelled": false}` if no such job is running.
 
 ### Internal API of the orchestrator
 
-Used by `ctx.kv`; requires the same `X-Runner-Secret` header.
+Used by the SDK; requires the same `X-Runner-Secret` header.
 
 | Request | Effect |
 | --- | --- |
 | `GET /internal/kv/{bot_id}/{key}` | `{"value": ...}` or 404 |
 | `PUT /internal/kv/{bot_id}/{key}` with `{"value": ...}` | Store a JSON value |
 | `DELETE /internal/kv/{bot_id}/{key}` | Remove a key |
+| `POST /internal/tasks` with `bot_id`, `handler`, `code`, `entry`, `args`, `kwargs`, `title`, `update`, `origin` | Queue a task: `{"id": 12}` |
+| `GET /internal/tasks/{id}?bot_id=` | `id`, `title`, `status`, `progress`, `error`, `entry` |
+| `POST /internal/tasks/{id}/cancel` with `bot_id` | `{"cancelled": true/false}` |
+| `POST /internal/tasks/{id}/progress` with `bot_id`, `text` | Progress line of a running task |
 
 ## Data model
 
+Schema version 2 (`PRAGMA user_version`). Databases created by 0.1.0 are
+migrated on start: the MVP handler becomes a handler called `main` behind a
+catch-all route, enabled if the MVP handler was active.
+
 | Table | Contents |
 | --- | --- |
-| `bots` | Encrypted token, username, status, update offset, allowed users, active handler version |
+| `bots` | Encrypted token, username, status, update offset, allowed users |
+| `handlers` | Name and active version per bot |
 | `handler_versions` | Code and comment of every saved version |
-| `updates` | Raw update, sender, summary, status, handler version, duration, error, logs, API calls (kept `UPDATE_RETENTION_DAYS`) |
+| `routes` | Position, condition, pattern, description, handler, enabled |
+| `updates` | Raw update, sender, summary, route, handler and version, status, duration, error, logs, API calls |
+| `tasks` | Code snapshot, entry, arguments, origin update, status, progress, run id, timings, error, logs, API calls |
+| `schedules` | Name, cron, handler, chat, enabled, next and last run |
 | `console_history` | Last 200 API console calls per bot |
 | `secrets` | Encrypted secret values |
 | `kv` | JSON values stored by handlers |
+| `app_settings` | Notification settings |
 
 Update statuses: `pending`, `ok`, `error`, `timeout`, `dispatch_error` (the runner
-could not be reached), `no_handler`, `ignored` (sender not in allowed users).
+could not be reached), `no_route`, `ignored` (sender not in allowed users).
+
+Task statuses: `queued`, `running`, `ok`, `error`, `timeout`, `cancelled`,
+`interrupted` (the orchestrator restarted while it ran), `dispatch_error`.
 
 ## Roadmap
 
-1. **MVP (done):** add bot with cloud logOut, polling, update log, API console,
-   one handler per bot with an editor, versions and test runs,
+1. **MVP (0.1, done):** add bot with cloud logOut, polling, update log, API
+   console, one handler per bot with an editor, versions and test runs,
    `ctx.reply/api/files/kv/secrets/shell`, file browser, allowed users.
-2. **Stage 2:** routes and multiple handlers per bot, background queue for long
-   tasks, user-bots, schedules, error notifications in Telegram, editor
-   autocompletion for the SDK.
-3. **Stage 3:** shared modules, Git sync for handlers, AI assistant in the
-   editor, metrics, webhook mode.
+2. **Stage 2 (0.2, done):** routes and multiple handlers per bot, background
+   tasks with cancel and retry, `ctx.download` (yt-dlp) and `ctx.reply_file`,
+   Bot API file cache cleanup, schedules, notifications in Telegram, editor
+   suggestions and handler templates.
+3. **Stage 3:** shared modules between handlers, Git sync for handlers, AI
+   assistant in the editor, metrics, webhook mode.
+4. **Later, maybe:** user-bots (a Telegram user account driven by code) for
+   conversations with third-party bots.

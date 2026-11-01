@@ -1,0 +1,23 @@
+{% from "_macros.html" import handler_options %}
+<form method="post" action="{{ action }}" class="stack schedule-form">
+  <div class="row">
+    <label class="grow">Name
+      <input type="text" name="name" required maxlength="100" value="{{ schedule.name if schedule else '' }}" placeholder="Morning digest">
+    </label>
+    <label class="grow">Handler
+      <select name="handler_id" required>{{ handler_options(handlers, schedule.handler_id if schedule else None) }}</select>
+    </label>
+  </div>
+  <div class="row">
+    <label class="grow">When (cron, {{ timezone }})
+      <input type="text" name="cron" class="mono cron-input" required value="{{ schedule.cron if schedule else '0 9 * * *' }}" spellcheck="false" autocomplete="off">
+    </label>
+    <label class="grow">Chat for <code>ctx.reply</code> <span class="muted small">(optional)</span>
+      <input type="text" name="chat_id" value="{{ schedule.chat_id if schedule and schedule.chat_id else '' }}" list="senders" placeholder="Telegram chat or user id" inputmode="numeric">
+      <datalist id="senders">{% for s in senders %}<option value="{{ s.from_id }}">{{ s.from_name or s.from_id }}</option>{% endfor %}</datalist>
+    </label>
+  </div>
+  <p class="muted small cron-preview">minute hour day-of-month month day-of-week · e.g. <code>*/15 * * * *</code>, <code>0 9 * * mon-fri</code>, <code>@daily</code></p>
+  <label class="check"><input type="checkbox" name="enabled" value="true" {% if not schedule or schedule.enabled %}checked{% endif %}> <span>Enabled</span></label>
+  <div><button class="primary">{{ "Save" if schedule else "Add schedule" }}</button></div>
+</form>

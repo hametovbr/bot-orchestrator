@@ -49,12 +49,22 @@ class Fake:
             "api_calls": [],
             "duration_ms": 12,
         }
+        # Background tasks wait for this event before answering, so tests can cancel them.
+        self.task_gate: asyncio.Event | None = None
+        self.cancelled: list[str] = []
 
     async def __call__(self, request: httpx.Request) -> httpx.Response:
         body = json.loads(request.content or b"{}")
         if request.url.host == "runner":
             assert request.headers["x-runner-secret"] == RUNNER_SECRET
+            if request.url.path.startswith("/cancel/"):
+                self.cancelled.append(request.url.path.removeprefix("/cancel/"))
+                if self.task_gate:
+                    self.task_gate.set()
+                return httpx.Response(200, json={"cancelled": True})
             self.runs.append(body)
+            if body.get("kind") == "task" and self.task_gate:
+                await self.task_gate.wait()
             return httpx.Response(200, json=self.runner_result)
 
         token, method = request.url.path.removeprefix("/bot").split("/", 1)
@@ -97,7 +107,10 @@ def settings(tmp_path: Path) -> Settings:
         runner_url="http://runner",
         database_path=":memory:",
         files_root=str(tmp_path / "files"),
+        bot_api_data_dir=str(tmp_path / "bot-api"),
         polling_timeout=0,
+        tz="Europe/Moscow",
+        public_url="https://bots.test",
     )
 
 

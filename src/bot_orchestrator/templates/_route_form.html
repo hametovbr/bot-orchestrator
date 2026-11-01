@@ -1,0 +1,24 @@
+{% from "_macros.html" import handler_options %}
+<form method="post" action="{{ action }}" class="stack route-form">
+  <div class="row">
+    <label class="grow">Condition
+      <select name="kind" class="route-kind">
+        {% for key, label in kinds.items() %}
+        <option value="{{ key }}" {% if route and route.kind == key %}selected{% endif %}>{{ label }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label class="grow">Pattern
+      <input type="text" name="pattern" class="route-pattern mono" value="{{ route.pattern if route else '' }}" spellcheck="false" autocomplete="off">
+    </label>
+    <label class="grow">Handler
+      <select name="handler_id" required>{{ handler_options(handlers, route.handler_id if route else None) }}</select>
+    </label>
+  </div>
+  <p class="muted small route-help"></p>
+  <label>Description <span class="muted small">(optional; for commands it becomes the menu text)</span>
+    <input type="text" name="description" maxlength="256" value="{{ route.description if route else '' }}">
+  </label>
+  <label class="check"><input type="checkbox" name="enabled" value="true" {% if not route or route.enabled %}checked{% endif %}> <span>Enabled</span></label>
+  <div><button class="primary">{{ "Save" if route else "Add route" }}</button></div>
+</form>

@@ -10,7 +10,7 @@
   </div>
 </div>
 <nav class="tabs">
-  {% for key, label in [("updates", "Updates"), ("handler", "Handler"), ("console", "API console"), ("files", "Files"), ("settings", "Settings")] %}
+  {% for key, label in [("updates", "Updates"), ("routes", "Routes"), ("handlers", "Handlers"), ("tasks", "Tasks"), ("schedules", "Schedules"), ("console", "API console"), ("files", "Files"), ("settings", "Settings")] %}
   <a href="/bots/{{ bot.id }}/{{ key }}" class="{% if tab == key %}active{% endif %}">{{ label }}</a>
   {% endfor %}
 </nav>

@@ -70,6 +70,8 @@ def describe(update: dict[str, Any]) -> dict[str, Any]:
             summary += f" {body['caption']}"
     elif kind == "callback_query":
         summary = f"[button] {body.get('data', '')}"
+    elif kind == "schedule":
+        summary = f"[schedule] {body.get('name', '')}"
     elif kind == "inline_query":
         summary = f"[inline] {body.get('query', '')}"
     return {

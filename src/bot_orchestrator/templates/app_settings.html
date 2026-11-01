@@ -1,0 +1,66 @@
+{% extends "base.html" %}
+{% block title %}Settings · Bot Orchestrator{% endblock %}
+{% block content %}
+<h1>Settings</h1>
+
+<section class="card">
+  <h2>Notifications</h2>
+  <p class="muted small">Problems are sent to you in Telegram by one of your bots. Similar messages are grouped:
+    at most one per 10 minutes for the same problem. The chat must have started the bot (sent it /start) first.</p>
+  <form method="post" action="/settings/notifications" class="stack">
+    <div class="row">
+      <label class="grow">Send with
+        <select name="notify_bot_id">
+          <option value="">— off —</option>
+          {% for b in bots %}
+          <option value="{{ b.id }}" {% if b.id == notify.notify_bot_id %}selected{% endif %}>@{{ b.username }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label class="grow">To chat id
+        <input type="text" name="notify_chat_id" value="{{ notify.notify_chat_id or '' }}" list="senders" inputmode="numeric" placeholder="your Telegram user id">
+        <datalist id="senders">{% for s in senders %}<option value="{{ s.from_id }}">{{ s.from_name or s.from_id }}</option>{% endfor %}</datalist>
+      </label>
+    </div>
+    {% if senders %}<p class="muted small">Recent senders: {% for s in senders[:5] %}{{ s.from_name or "?" }} — <code>{{ s.from_id }}</code>{% if not loop.last %}; {% endif %}{% endfor %}</p>{% endif %}
+    <fieldset class="checks">
+      <legend>Notify about</legend>
+      {% for key, label in events.items() %}
+      <label class="check"><input type="checkbox" name="notify_events" value="{{ key }}" {% if key in notify.notify_events %}checked{% endif %}> <span>{{ label }}</span></label>
+      {% endfor %}
+    </fieldset>
+    <div class="row">
+      <button class="primary">Save</button>
+    </div>
+  </form>
+  <form method="post" action="/settings/notifications/test" class="space-top"><button class="small">Send a test notification</button></form>
+</section>
+
+<section class="card">
+  <h2>Storage</h2>
+  <div class="kv-grid">
+    <div>Bot files</div><div>{{ files_size | size }} in <code>{{ settings.files_root }}</code></div>
+    <div>Disk</div><div>{% if disk is not none %}{{ "%.0f" | format(disk) }}% used{% if disk >= settings.disk_warning_percent %} <span class="badge badge-error">almost full</span>{% endif %}{% else %}<span class="muted">unknown</span>{% endif %}</div>
+    <div>Bot API file cache</div><div>{{ cache.bytes | size }} in {{ cache.files }} files</div>
+    <div>Automatic cleanup</div><div>{% if settings.cache_retention_hours %}files older than {{ settings.cache_retention_hours }} h, every hour{% else %}off{% endif %} <span class="muted small">(CACHE_RETENTION_HOURS)</span></div>
+  </div>
+  <p class="muted small">The local Bot API server keeps every file it downloads for handlers. Files that handlers moved
+    with <code>ctx.files.move</code> are already gone from the cache.</p>
+  <form method="post" action="/settings/cache/clean" class="row"
+        data-confirm="Delete cached Bot API files? Handlers that still need a file will download it again.">
+    <label class="inline-label">Delete cached files older than
+      <input type="number" name="hours" value="{{ settings.cache_retention_hours or 24 }}" min="0" step="1" class="narrow"> h</label>
+    <button>Clean now</button>
+  </form>
+</section>
+
+<section class="card">
+  <h2>Server</h2>
+  <div class="kv-grid">
+    <div>Timezone</div><div>{{ settings.tz }} <span class="muted small">(TZ; used by schedules)</span></div>
+    <div>Public URL</div><div>{{ settings.public_url or "not set" }} <span class="muted small">(PUBLIC_URL; used for links in notifications)</span></div>
+    <div>Background tasks</div><div>{{ settings.task_concurrency }} at a time <span class="muted small">(TASK_CONCURRENCY)</span></div>
+    <div>Update log</div><div>kept {{ settings.update_retention_days }} days <span class="muted small">(UPDATE_RETENTION_DAYS)</span></div>
+  </div>
+</section>
+{% endblock %}

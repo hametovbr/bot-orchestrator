@@ -1,0 +1,47 @@
+{% extends "bot_base.html" %}
+{% from "_macros.html" import status_badge %}
+{% block tab %}
+<p class="muted small">A schedule runs a handler with an update of type <code>schedule</code>
+  (<code>update.schedule.name</code>, <code>.time</code>, <code>.chat</code>). Times are in {{ timezone }}.
+  Schedules of a paused bot do not run.</p>
+
+{% if schedules %}
+<table class="table">
+  <thead><tr><th>Name</th><th>When</th><th>Handler</th><th>Next run</th><th>Last run</th><th></th></tr></thead>
+  <tbody>
+  {% for s in schedules %}
+    <tr class="{% if not s.enabled %}disabled{% endif %}">
+      <td><strong>{{ s.name }}</strong>{% if s.chat_id %}<div class="muted small">chat {{ s.chat_id }}</div>{% endif %}</td>
+      <td><code>{{ s.cron }}</code></td>
+      <td><a href="/bots/{{ bot.id }}/handlers/{{ s.handler_id }}">{{ s.handler_name }}</a></td>
+      <td class="small nowrap">{% if s.enabled and s.next_run_at %}{{ s.next_run_at | time(false) }}{% else %}<span class="muted">off</span>{% endif %}</td>
+      <td class="small nowrap">{% if s.last_run_at %}<a href="/bots/{{ bot.id }}/updates/{{ s.last_update_row }}">{{ s.last_run_at | time(false) }}</a> {{ status_badge(s.last_status) }}{% else %}<span class="muted">never</span>{% endif %}</td>
+      <td class="right nowrap">
+        <form method="post" action="/bots/{{ bot.id }}/schedules/{{ s.id }}/run" class="inline"><button class="small">Run now</button></form>
+        <form method="post" action="/bots/{{ bot.id }}/schedules/{{ s.id }}/toggle" class="inline"><button class="small">{{ "Disable" if s.enabled else "Enable" }}</button></form>
+        <a class="button small" href="/bots/{{ bot.id }}/schedules/{{ s.id }}">Edit</a>
+      </td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p class="muted">No schedules.</p>
+{% endif %}
+
+{% if handlers %}
+<section class="card">
+  <h2>Add a schedule</h2>
+  {% set action = "/bots/" ~ bot.id ~ "/schedules" %}
+  {% set schedule = none %}
+  {% include "_schedule_form.html" %}
+</section>
+{% else %}
+<p class="muted">Create a <a href="/bots/{{ bot.id }}/handlers">handler</a> first.</p>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>window.BOT_ID = {{ bot.id }};</script>
+<script src="/static/schedules.js"></script>
+{% endblock %}

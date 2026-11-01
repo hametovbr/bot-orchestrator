@@ -1,6 +1,6 @@
 [project]
 name = "bot-orchestrator"
-version = "0.1.0"
+version = "0.2.0"
 description = "Self-hosted web panel for running many Telegram bots on one local Bot API server"
 readme = "README.md"
 license = "MIT"
@@ -14,6 +14,7 @@ dependencies = [
     "jinja2>=3.1",
     "pydantic-settings>=2.4",
     "python-multipart>=0.0.12",
+    "tzdata>=2024.1",
     "uvicorn[standard]>=0.30",
 ]
 
@@ -37,8 +38,8 @@ target-version = "py312"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "ASYNC"]
-# Request timeouts on async methods are intentional.
-ignore = ["ASYNC109"]
+# Request timeouts on async methods are intentional; quick pathlib calls are fine here.
+ignore = ["ASYNC109", "ASYNC240"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

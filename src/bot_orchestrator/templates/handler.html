@@ -1,12 +1,21 @@
 {% extends "bot_base.html" %}
 {% from "_macros.html" import status_badge %}
 {% block tab %}
-<form method="post" action="/bots/{{ bot.id }}/handler" id="save-form" class="stack">
+<p><a class="muted small" href="/bots/{{ bot.id }}/handlers">← Handlers</a></p>
+<div class="toolbar">
+  <h2 class="inline">{{ handler.name }}</h2>
+  <span class="muted small">
+    {% if routes or schedules %}Used by
+      {% for r in routes %}<a href="/bots/{{ bot.id }}/routes/{{ r.id }}">{{ r | route }}</a>{% if not r.enabled %} (off){% endif %}{% if not loop.last or schedules %}, {% endif %}{% endfor %}
+      {% for s in schedules %}<a href="/bots/{{ bot.id }}/schedules/{{ s.id }}">schedule “{{ s.name }}”</a>{% if not loop.last %}, {% endif %}{% endfor %}
+    {% else %}Not used yet: add a <a href="/bots/{{ bot.id }}/routes">route</a> or a <a href="/bots/{{ bot.id }}/schedules">schedule</a>.{% endif %}
+  </span>
+</div>
+
+<form method="post" action="/bots/{{ bot.id }}/handlers/{{ handler.id }}" id="save-form" class="stack">
   <div class="toolbar">
-    <span>
-      {% if shown_version %}Editing version <strong>{{ shown_version }}</strong>
-        {% if shown_version == bot.active_version %}<span class="badge badge-ok">active</span>{% else %}<span class="badge badge-paused">not active</span>{% endif %}
-      {% else %}<strong>New handler</strong> <span class="muted">— nothing is saved yet</span>{% endif %}
+    <span>Editing version <strong>{{ shown_version }}</strong>
+      {% if shown_version == handler.active_version %}<span class="badge badge-ok">active</span>{% else %}<span class="badge badge-paused">not active</span>{% endif %}
     </span>
     <input type="text" name="comment" placeholder="What changed (optional)" maxlength="200" class="grow">
     <button class="primary">Save and activate</button>
@@ -19,7 +28,8 @@
   <section class="card">
     <h2>Test run</h2>
     <p class="muted small">Runs the code in the editor (saved or not) on a real update. In a dry run only
-      <code>get*</code> Bot API methods reach Telegram; everything else is recorded but not sent.</p>
+      <code>get*</code> Bot API methods reach Telegram; other calls and <code>ctx.background</code> are recorded
+      but not done.</p>
     <div class="stack">
       <label>Update
         <select id="test-update">
@@ -38,56 +48,63 @@
 
   <section class="card">
     <h2>Versions</h2>
-    {% if versions %}
     <table class="table compact">
       <tbody>
       {% for v in versions %}
         <tr>
           <td><a href="?version={{ v.version }}">v{{ v.version }}</a>
-            {% if v.version == bot.active_version %}<span class="badge badge-ok">active</span>{% endif %}</td>
+            {% if v.version == handler.active_version %}<span class="badge badge-ok">active</span>{% endif %}</td>
           <td class="muted small">{{ v.created_at | time }}<div>{{ v.comment }}</div></td>
-          <td class="right">{% if v.version != bot.active_version %}
-            <form method="post" action="/bots/{{ bot.id }}/handler/activate">
+          <td class="right">{% if v.version != handler.active_version %}
+            <form method="post" action="/bots/{{ bot.id }}/handlers/{{ handler.id }}/activate">
               <input type="hidden" name="version" value="{{ v.version }}"><button class="small">Activate</button>
             </form>{% endif %}</td>
         </tr>
       {% endfor %}
       </tbody>
     </table>
-    {% if bot.active_version %}
-    <form method="post" action="/bots/{{ bot.id }}/handler/activate">
-      <input type="hidden" name="version" value="0">
-      <button class="small">Disable handler</button>
+    <h3>Handler</h3>
+    <form method="post" action="/bots/{{ bot.id }}/handlers/{{ handler.id }}/rename" class="row">
+      <input type="text" name="name" value="{{ handler.name }}" pattern="[A-Za-z0-9_\-]{1,40}" required class="grow">
+      <button class="small">Rename</button>
     </form>
-    {% endif %}
-    {% else %}<p class="muted">No versions yet.</p>{% endif %}
+    <form method="post" action="/bots/{{ bot.id }}/handlers/{{ handler.id }}/delete" class="row space-top"
+          data-confirm="Delete {{ handler.name }} with all its versions, routes and schedules?">
+      <button class="small danger">Delete handler</button>
+    </form>
   </section>
 </div>
 
 <details class="card">
   <summary><strong>Handler reference</strong></summary>
-  <p>Define <code>handle(update, ctx)</code> (sync or async). It runs in bot-runner for every update the bot
-    receives, in its own process, with a time limit.</p>
+  <p>Define <code>handle(update, ctx)</code> (sync or async). It runs in bot-runner for every update a route sends
+    here, in its own process, with a time limit. Type <code>ctx.</code> in the editor for suggestions.</p>
   <table class="table compact">
     <tbody>
-      <tr><td><code>update.message.text</code></td><td>Telegram fields as attributes; a missing field is <code>None</code>. <code>message.from_</code> is the sender. <code>update.to_dict()</code> gives the raw JSON.</td></tr>
+      <tr><td><code>update.message.text</code></td><td>Telegram fields as attributes; a missing field is <code>None</code>. <code>message.from_</code> is the sender. <code>update.to_dict()</code> gives the raw JSON. Scheduled runs get <code>update.schedule</code> (name, time, chat).</td></tr>
       <tr><td><code>await ctx.reply(text, **params)</code></td><td>Send a message to the chat of the update.</td></tr>
-      <tr><td><code>await ctx.api.send_document(chat_id=…, document=path)</code></td><td>Any Bot API method, snake_case or camelCase. A <code>Path</code> is sent as a local file (up to 2 GB).</td></tr>
+      <tr><td><code>await ctx.reply_file(path, caption)</code></td><td>Send a file to the chat: video, audio, photo or document by extension (up to 2 GB).</td></tr>
+      <tr><td><code>await ctx.api.send_message(chat_id=…, text=…)</code></td><td>Any Bot API method, snake_case or camelCase. A <code>Path</code> is sent as a local file.</td></tr>
       <tr><td><code>await ctx.answer_callback(text)</code></td><td>Answer the callback query of the update.</td></tr>
-      <tr><td><code>await ctx.files.local_path(file_id)</code></td><td>Download a file through the local Bot API server and get its path on disk.</td></tr>
+      <tr><td><code>task_id = await ctx.background(func, *args, title=…)</code></td><td>Run <code>func(ctx, *args)</code> as a background task with a longer time limit. <code>func</code> must be defined at the top level of this code; arguments are JSON values.</td></tr>
+      <tr><td><code>await ctx.progress(text)</code></td><td>Inside a task: progress shown on the Tasks tab.</td></tr>
+      <tr><td><code>await ctx.tasks.get(id)</code>, <code>await ctx.tasks.cancel(id)</code></td><td>Status of a task, or cancel it (e.g. from a button).</td></tr>
+      <tr><td><code>result = await ctx.download(url)</code></td><td>Download video or audio with yt-dlp into <code>downloads/</code>, with a progress message in the chat. Options: <code>audio_only</code>, <code>format</code>, <code>max_size_mb</code>, <code>cookies="/shared/cookies.txt"</code>, <code>status</code>, <code>messages</code>. Returns <code>path</code>, <code>title</code>, <code>size</code>, <code>info</code>.</td></tr>
+      <tr><td><code>await ctx.files.local_path(file_id)</code></td><td>Download a Telegram file through the local Bot API server and get its path.</td></tr>
       <tr><td><code>ctx.files.move(src, "inbox/name.pdf")</code></td><td>Move or <code>copy</code> a file into the bot folder; existing names get a <code>(1)</code> suffix. Also <code>write_text</code>, <code>write_bytes</code>, <code>read_text</code>, <code>list</code>, <code>path</code>, <code>safe_name</code>.</td></tr>
       <tr><td><code>await ctx.kv.get(key, default)</code></td><td>Per-bot storage of JSON values; also <code>set</code> and <code>delete</code>.</td></tr>
       <tr><td><code>ctx.secrets["NAME"]</code></td><td>Secrets from the Settings tab.</td></tr>
       <tr><td><code>ctx.log(...)</code>, <code>print(...)</code></td><td>Write to the update log.</td></tr>
       <tr><td><code>await ctx.http.get(url)</code></td><td>An <code>httpx.AsyncClient</code> for outside requests.</td></tr>
-      <tr><td><code>await ctx.shell("yt-dlp", url)</code></td><td>Run a program in the bot folder; returns <code>returncode</code>, <code>stdout</code>, <code>stderr</code>.</td></tr>
+      <tr><td><code>await ctx.shell("ffmpeg", …)</code></td><td>Run a program in the bot folder; returns <code>returncode</code>, <code>stdout</code>, <code>stderr</code>.</td></tr>
     </tbody>
   </table>
 </details>
 {% endblock %}
 
 {% block scripts %}
-<script>window.BOT_ID = {{ bot.id }};</script>
+<script>window.BOT_ID = {{ bot.id }}; window.HANDLER_ID = {{ handler.id }};</script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.52.2/min/vs/loader.min.js"></script>
+<script src="/static/sdk_hints.js"></script>
 <script src="/static/handler.js"></script>
 {% endblock %}

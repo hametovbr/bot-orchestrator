@@ -37,11 +37,16 @@ services:
     environment:
       RUNNER_SECRET: ${RUNNER_SECRET:?set RUNNER_SECRET in .env}
       HANDLER_TIMEOUT: ${HANDLER_TIMEOUT:-60}
+      TASK_TIMEOUT: ${TASK_TIMEOUT:-3600}
       HANDLER_MEMORY_MB: ${HANDLER_MEMORY_MB:-1024}
       MAX_CONCURRENT_RUNS: ${MAX_CONCURRENT_RUNS:-8}
+      MAX_CONCURRENT_TASKS: ${MAX_CONCURRENT_TASKS:-2}
+      TZ: ${TZ:-UTC}
     volumes:
       - bot-files:/files
       - bot-api-data:/var/lib/telegram-bot-api
+      # Read-only files handlers may use, e.g. cookies for ctx.download.
+      - ./shared:/shared:ro
     mem_limit: 4g
     cpus: 2
 
@@ -59,6 +64,14 @@ services:
       UPDATE_RETENTION_DAYS: ${UPDATE_RETENTION_DAYS:-14}
       BOT_CONCURRENCY: ${BOT_CONCURRENCY:-4}
       SECURE_COOKIES: ${SECURE_COOKIES:-false}
+      PUBLIC_URL: ${PUBLIC_URL:-}
+      TZ: ${TZ:-UTC}
+      TASK_CONCURRENCY: ${TASK_CONCURRENCY:-2}
+      CACHE_RETENTION_HOURS: ${CACHE_RETENTION_HOURS:-24}
+      DISK_WARNING_PERCENT: ${DISK_WARNING_PERCENT:-90}
+      # Keep these above the runner's HANDLER_TIMEOUT and TASK_TIMEOUT.
+      RUNNER_REQUEST_TIMEOUT: ${RUNNER_REQUEST_TIMEOUT:-180}
+      TASK_REQUEST_TIMEOUT: ${TASK_REQUEST_TIMEOUT:-7200}
     volumes:
       - orchestrator-data:/data
       - bot-files:/files

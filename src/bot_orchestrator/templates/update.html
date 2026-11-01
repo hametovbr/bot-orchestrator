@@ -1,5 +1,5 @@
 {% extends "bot_base.html" %}
-{% from "_macros.html" import status_badge %}
+{% from "_macros.html" import status_badge, api_calls %}
 {% block tab %}
 <p><a class="muted small" href="/bots/{{ bot.id }}/updates">← Updates</a></p>
 <div class="kv-grid">
@@ -7,9 +7,24 @@
   <div>Update id</div><div>{{ u.update_id }}</div>
   <div>Type</div><div>{{ u.kind }}</div>
   <div>From</div><div>{{ u.from_name or "" }} {% if u.from_id %}<span class="muted">({{ u.from_id }})</span>{% endif %}</div>
-  <div>Result</div><div>{{ status_badge(u.status) }}{% if u.handler_version %} handler v{{ u.handler_version }}{% endif %}{% if u.duration_ms is not none %}, {{ u.duration_ms }} ms{% endif %}</div>
+  <div>Route</div><div>{% if route %}<a href="/bots/{{ bot.id }}/routes/{{ route.id }}">{{ route | route }}</a>{% elif u.kind == "schedule" %}schedule{% else %}<span class="muted">none</span>{% endif %}</div>
+  <div>Handler</div><div>{% if u.handler_id %}<a href="/bots/{{ bot.id }}/handlers/{{ u.handler_id }}">{{ u.handler_name }}</a>{% if u.handler_version %} v{{ u.handler_version }}{% endif %}{% else %}<span class="muted">none</span>{% endif %}</div>
+  <div>Result</div><div>{{ status_badge(u.status) }}{% if u.duration_ms is not none %} {{ u.duration_ms | duration }}{% endif %}</div>
 </div>
-<p><a class="button" href="/bots/{{ bot.id }}/handler?update={{ u.id }}">Test the handler on this update</a></p>
+{% if u.handler_id %}
+<p><a class="button" href="/bots/{{ bot.id }}/handlers/{{ u.handler_id }}?update={{ u.id }}">Test {{ u.handler_name }} on this update</a></p>
+{% endif %}
+
+{% if tasks %}
+<h2>Background tasks</h2>
+<table class="table compact">
+  <tbody>
+  {% for t in tasks %}
+    <tr><td><a href="/bots/{{ bot.id }}/tasks/{{ t.id }}">#{{ t.id }} {{ t.title }}</a></td><td>{{ status_badge(t.status) }}</td><td class="muted small">{{ t.duration_ms | duration }}</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endif %}
 
 {% if u.error %}
 <h2>Error</h2>
@@ -20,20 +35,7 @@
 {% if u.logs %}<pre class="code">{{ u.logs | join("\n") }}</pre>{% else %}<p class="muted">Nothing logged.</p>{% endif %}
 
 <h2>Bot API calls</h2>
-{% if u.api_calls %}
-<table class="table">
-  <thead><tr><th>Method</th><th>Parameters</th><th>Result</th></tr></thead>
-  <tbody>
-  {% for c in u.api_calls %}
-    <tr>
-      <td><code>{{ c.method }}</code></td>
-      <td><pre class="inline">{{ c.params | pretty }}</pre></td>
-      <td>{% if c.dry_run %}<span class="badge badge-paused">dry run</span>{% elif c.ok %}<span class="badge badge-ok">ok</span>{% else %}<span class="badge badge-error">failed</span> <span class="small">{{ c.error }}</span>{% endif %}</td>
-    </tr>
-  {% endfor %}
-  </tbody>
-</table>
-{% else %}<p class="muted">No Bot API calls.</p>{% endif %}
+{{ api_calls(u.api_calls, bot) }}
 
 <h2>Raw update</h2>
 <pre class="code">{{ u.raw | pretty }}</pre>

@@ -11,7 +11,11 @@
   <header class="topbar">
     <a class="brand" href="/">Bot Orchestrator</a>
     {% if request.session.get("auth") %}
-    <form method="post" action="/logout"><button class="link">Log out</button></form>
+    <nav class="topnav">
+      <a href="/" class="{% if request.url.path == '/' or request.url.path.startswith('/bots') %}active{% endif %}">Bots</a>
+      <a href="/settings" class="{% if request.url.path == '/settings' %}active{% endif %}">Settings</a>
+      <form method="post" action="/logout"><button class="link">Log out</button></form>
+    </nav>
     {% endif %}
   </header>
   <main class="{% block main_class %}page{% endblock %}">

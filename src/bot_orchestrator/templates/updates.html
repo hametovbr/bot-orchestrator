@@ -4,8 +4,9 @@
 <form method="get" class="toolbar">
   <label>Status
     <select name="status" onchange="this.form.submit()">
-      {% for s in ["", "ok", "error", "timeout", "dispatch_error", "pending", "no_handler", "ignored"] %}
-      <option value="{{ s }}" {% if s == status %}selected{% endif %}>{{ s | replace("_", " ") if s else "all" }}</option>
+      <option value="">all</option>
+      {% for s in statuses %}
+      <option value="{{ s }}" {% if s == status %}selected{% endif %}>{{ s | replace("_", " ") }}</option>
       {% endfor %}
     </select>
   </label>
@@ -16,18 +17,19 @@
 {% if updates %}
 <table class="table">
   <thead>
-    <tr><th>Received</th><th>Type</th><th>From</th><th>Content</th><th>Result</th><th class="num">Time</th></tr>
+    <tr><th>Received</th><th>Type</th><th>From</th><th>Content</th><th>Handler</th><th>Result</th><th class="num">Time</th></tr>
   </thead>
   <tbody>
   {% for u in updates %}
-    <tr class="clickable" onclick="location.href='/bots/{{ bot.id }}/updates/{{ u.id }}'">
+    <tr class="clickable" data-href="/bots/{{ bot.id }}/updates/{{ u.id }}">
       <td class="nowrap"><a href="/bots/{{ bot.id }}/updates/{{ u.id }}">{{ u.received_at | time }}</a></td>
       <td>{{ u.kind }}</td>
       <td>{{ u.from_name or "" }}<div class="muted small">{{ u.from_id or "" }}</div></td>
       <td class="ellipsis">{{ u.summary }}</td>
-      <td>{{ status_badge(u.status) }}{% if u.handler_version %} <span class="muted small">v{{ u.handler_version }}</span>{% endif %}
+      <td class="nowrap">{% if u.handler_name %}{{ u.handler_name }}{% if u.handler_version %} <span class="muted small">v{{ u.handler_version }}</span>{% endif %}{% endif %}</td>
+      <td>{{ status_badge(u.status) }}
         {% if u.error %}<div class="text-error small ellipsis">{{ u.error.strip().splitlines()[-1] }}</div>{% endif %}</td>
-      <td class="num nowrap">{% if u.duration_ms is not none %}{{ u.duration_ms }} ms{% endif %}</td>
+      <td class="num nowrap">{{ u.duration_ms | duration }}</td>
     </tr>
   {% endfor %}
   </tbody>

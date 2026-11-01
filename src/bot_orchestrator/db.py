@@ -1,4 +1,4 @@
-"""SQLite storage."""
+"""SQLite storage with schema migrations."""
 
 from __future__ import annotations
 
@@ -9,7 +9,10 @@ from typing import Any
 
 import aiosqlite
 
-SCHEMA = """
+SCHEMA_VERSION = 2
+
+# Tables shared by every schema version.
+BASE_SCHEMA = """
 CREATE TABLE IF NOT EXISTS bots (
     id              INTEGER PRIMARY KEY,          -- Telegram bot id
     username        TEXT NOT NULL,
@@ -19,17 +22,7 @@ CREATE TABLE IF NOT EXISTS bots (
     status_message  TEXT,
     update_offset   INTEGER NOT NULL DEFAULT 0,
     allowed_users   TEXT NOT NULL DEFAULT '',     -- comma-separated Telegram user ids
-    active_version  INTEGER,
     created_at      REAL NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS handler_versions (
-    bot_id      INTEGER NOT NULL REFERENCES bots(id) ON DELETE CASCADE,
-    version     INTEGER NOT NULL,
-    code        TEXT NOT NULL,
-    comment     TEXT NOT NULL DEFAULT '',
-    created_at  REAL NOT NULL,
-    PRIMARY KEY (bot_id, version)
 );
 
 CREATE TABLE IF NOT EXISTS updates (
@@ -42,8 +35,7 @@ CREATE TABLE IF NOT EXISTS updates (
     from_name        TEXT,
     summary          TEXT NOT NULL DEFAULT '',
     raw              TEXT NOT NULL,
-    status           TEXT NOT NULL,   -- pending | ok | error | timeout | ignored | no_handler
-                                      -- | dispatch_error
+    status           TEXT NOT NULL,
     handler_version  INTEGER,
     duration_ms      INTEGER,
     error            TEXT,
@@ -78,9 +70,133 @@ CREATE TABLE IF NOT EXISTS kv (
 );
 """
 
+# Added in version 2: several handlers per bot, routes, background tasks, schedules.
+V2_TABLES = """
+CREATE TABLE handlers (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    bot_id          INTEGER NOT NULL REFERENCES bots(id) ON DELETE CASCADE,
+    name            TEXT NOT NULL,
+    active_version  INTEGER,
+    created_at      REAL NOT NULL,
+    UNIQUE (bot_id, name)
+);
+
+CREATE TABLE handler_versions (
+    handler_id  INTEGER NOT NULL REFERENCES handlers(id) ON DELETE CASCADE,
+    version     INTEGER NOT NULL,
+    code        TEXT NOT NULL,
+    comment     TEXT NOT NULL DEFAULT '',
+    created_at  REAL NOT NULL,
+    PRIMARY KEY (handler_id, version)
+);
+
+CREATE TABLE routes (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    bot_id       INTEGER NOT NULL REFERENCES bots(id) ON DELETE CASCADE,
+    position     INTEGER NOT NULL,
+    kind         TEXT NOT NULL,   -- command | regex | content | callback | update | any
+    pattern      TEXT NOT NULL DEFAULT '',
+    description  TEXT NOT NULL DEFAULT '',
+    handler_id   INTEGER NOT NULL REFERENCES handlers(id) ON DELETE CASCADE,
+    enabled      INTEGER NOT NULL DEFAULT 1
+);
+CREATE INDEX routes_bot ON routes (bot_id, position);
+
+CREATE TABLE tasks (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    bot_id        INTEGER NOT NULL REFERENCES bots(id) ON DELETE CASCADE,
+    handler_id    INTEGER,
+    handler_name  TEXT,
+    version       INTEGER NOT NULL DEFAULT 0,
+    code          TEXT NOT NULL,
+    entry         TEXT NOT NULL,
+    args          TEXT NOT NULL DEFAULT '[]',
+    kwargs        TEXT NOT NULL DEFAULT '{}',
+    title         TEXT NOT NULL,
+    origin_update TEXT NOT NULL,
+    update_row    INTEGER,          -- updates.id of the update that started the task
+    status        TEXT NOT NULL,    -- queued | running | ok | error | timeout | cancelled
+                                    -- | interrupted | dispatch_error
+    progress      TEXT,
+    run_id        TEXT,
+    created_at    REAL NOT NULL,
+    started_at    REAL,
+    finished_at   REAL,
+    duration_ms   INTEGER,
+    error         TEXT,
+    logs          TEXT NOT NULL DEFAULT '[]',
+    api_calls     TEXT NOT NULL DEFAULT '[]'
+);
+CREATE INDEX tasks_bot ON tasks (bot_id, id DESC);
+CREATE INDEX tasks_status ON tasks (status, id);
+
+CREATE TABLE schedules (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    bot_id           INTEGER NOT NULL REFERENCES bots(id) ON DELETE CASCADE,
+    name             TEXT NOT NULL,
+    cron             TEXT NOT NULL,
+    handler_id       INTEGER NOT NULL REFERENCES handlers(id) ON DELETE CASCADE,
+    chat_id          INTEGER,
+    enabled          INTEGER NOT NULL DEFAULT 1,
+    next_run_at      REAL,
+    last_run_at      REAL,
+    last_status      TEXT,
+    last_update_row  INTEGER,
+    created_at       REAL NOT NULL
+);
+
+CREATE TABLE app_settings (
+    key    TEXT PRIMARY KEY,
+    value  TEXT NOT NULL
+);
+"""
+
+V2_UPDATE_COLUMNS = """
+ALTER TABLE updates ADD COLUMN handler_id INTEGER;
+ALTER TABLE updates ADD COLUMN handler_name TEXT;
+ALTER TABLE updates ADD COLUMN route_id INTEGER;
+"""
+
+# From the MVP schema (version 1): one handler per bot. Its versions become a handler
+# called "main" behind a catch-all route that is enabled if the MVP handler was active.
+MIGRATE_1_TO_2 = (
+    "ALTER TABLE handler_versions RENAME TO handler_versions_v1;\n"
+    + V2_TABLES
+    + V2_UPDATE_COLUMNS
+    + """
+INSERT INTO handlers (bot_id, name, active_version, created_at)
+    SELECT v.bot_id, 'main',
+           COALESCE(b.active_version, MAX(v.version)), MIN(v.created_at)
+      FROM handler_versions_v1 v JOIN bots b ON b.id = v.bot_id
+     GROUP BY v.bot_id;
+INSERT INTO handler_versions (handler_id, version, code, comment, created_at)
+    SELECT h.id, v.version, v.code, v.comment, v.created_at
+      FROM handler_versions_v1 v JOIN handlers h ON h.bot_id = v.bot_id AND h.name = 'main';
+INSERT INTO routes (bot_id, position, kind, pattern, description, handler_id, enabled)
+    SELECT h.bot_id, 1, 'any', '', '', h.id,
+           CASE WHEN b.active_version IS NULL THEN 0 ELSE 1 END
+      FROM handlers h JOIN bots b ON b.id = h.bot_id;
+UPDATE updates SET handler_name = 'main' WHERE handler_version IS NOT NULL;
+UPDATE updates SET status = 'no_route' WHERE status = 'no_handler';
+DROP TABLE handler_versions_v1;
+"""
+)
+
 
 def _row(row: aiosqlite.Row | None) -> dict[str, Any] | None:
     return dict(row) if row is not None else None
+
+
+def _decode(row: dict[str, Any] | None, *fields: str) -> dict[str, Any] | None:
+    if row:
+        for name in fields:
+            if row.get(name) is not None:
+                row[name] = json.loads(row[name])
+    return row
+
+
+def _json(value: Any) -> str:
+    return json.dumps(value, ensure_ascii=False)
 
 
 class Database:
@@ -94,9 +210,28 @@ class Database:
         self._db = await aiosqlite.connect(self._path)
         self._db.row_factory = aiosqlite.Row
         await self._db.execute("PRAGMA journal_mode=WAL")
+        await self._migrate()
         await self._db.execute("PRAGMA foreign_keys=ON")
-        await self._db.executescript(SCHEMA)
-        await self._db.commit()
+
+    async def _migrate(self) -> None:
+        async with self.db.execute("PRAGMA user_version") as cursor:
+            version = (await cursor.fetchone())[0]
+        async with self.db.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'bots'"
+        ) as cursor:
+            has_tables = await cursor.fetchone() is not None
+        if version >= SCHEMA_VERSION:
+            return
+        if not has_tables:
+            script = BASE_SCHEMA + V2_TABLES + V2_UPDATE_COLUMNS
+        elif version in (0, 1):
+            script = MIGRATE_1_TO_2
+        else:
+            raise RuntimeError(f"unknown database schema version {version}")
+        # One transaction: a failed migration leaves the database untouched.
+        await self.db.executescript(
+            f"BEGIN;\n{script}\nPRAGMA user_version = {SCHEMA_VERSION};\nCOMMIT;"
+        )
 
     async def close(self) -> None:
         if self._db:
@@ -120,9 +255,16 @@ class Database:
         await self.db.commit()
         return cursor.lastrowid or 0
 
+    async def _change(self, sql: str, *args: Any) -> int:
+        """Run an UPDATE/DELETE and return the number of changed rows."""
+        cursor = await self.db.execute(sql, args)
+        await self.db.commit()
+        return cursor.rowcount
+
     # Bots
 
     async def list_bots(self) -> list[dict[str, Any]]:
+        since = time.time() - 86400
         return await self._all(
             """
             SELECT b.*,
@@ -130,11 +272,15 @@ class Database:
                      WHERE u.bot_id = b.id AND u.received_at > ?) AS updates_24h,
                    (SELECT COUNT(*) FROM updates u
                      WHERE u.bot_id = b.id AND u.received_at > ?
-                       AND u.status IN ('error', 'timeout', 'dispatch_error')) AS errors_24h
+                       AND u.status IN ('error', 'timeout', 'dispatch_error')) AS errors_24h,
+                   (SELECT COUNT(*) FROM tasks t
+                     WHERE t.bot_id = b.id AND t.status IN ('queued', 'running')) AS tasks_active,
+                   (SELECT COUNT(*) FROM routes r
+                     WHERE r.bot_id = b.id AND r.enabled = 1) AS routes_enabled
               FROM bots b ORDER BY b.username
             """,
-            time.time() - 86400,
-            time.time() - 86400,
+            since,
+            since,
         )
 
     async def get_bot(self, bot_id: int) -> dict[str, Any] | None:
@@ -172,37 +318,174 @@ class Database:
     async def delete_bot(self, bot_id: int) -> None:
         await self._exec("DELETE FROM bots WHERE id = ?", bot_id)
 
-    # Handler versions
+    # Handlers
 
-    async def list_versions(self, bot_id: int) -> list[dict[str, Any]]:
+    async def list_handlers(self, bot_id: int) -> list[dict[str, Any]]:
+        return await self._all(
+            """
+            SELECT h.*,
+                   (SELECT COUNT(*) FROM routes r WHERE r.handler_id = h.id) AS routes,
+                   (SELECT COUNT(*) FROM schedules s WHERE s.handler_id = h.id) AS schedules,
+                   (SELECT MAX(version) FROM handler_versions v
+                     WHERE v.handler_id = h.id) AS latest_version,
+                   (SELECT MAX(created_at) FROM handler_versions v
+                     WHERE v.handler_id = h.id) AS updated_at
+              FROM handlers h WHERE h.bot_id = ? ORDER BY h.name
+            """,
+            bot_id,
+        )
+
+    async def get_handler(self, bot_id: int, handler_id: int) -> dict[str, Any] | None:
+        return await self._one(
+            "SELECT * FROM handlers WHERE bot_id = ? AND id = ?", bot_id, handler_id
+        )
+
+    async def get_handler_by_name(self, bot_id: int, name: str) -> dict[str, Any] | None:
+        return await self._one("SELECT * FROM handlers WHERE bot_id = ? AND name = ?", bot_id, name)
+
+    async def create_handler(self, bot_id: int, name: str, code: str, comment: str = "") -> int:
+        cursor = await self.db.execute(
+            "INSERT INTO handlers (bot_id, name, active_version, created_at) VALUES (?, ?, 1, ?)",
+            (bot_id, name, time.time()),
+        )
+        handler_id = cursor.lastrowid
+        await self.db.execute(
+            "INSERT INTO handler_versions (handler_id, version, code, comment, created_at)"
+            " VALUES (?, 1, ?, ?, ?)",
+            (handler_id, code, comment, time.time()),
+        )
+        await self.db.commit()
+        return handler_id
+
+    async def rename_handler(self, handler_id: int, name: str) -> None:
+        await self._exec("UPDATE handlers SET name = ? WHERE id = ?", name, handler_id)
+
+    async def delete_handler(self, handler_id: int) -> None:
+        await self._exec("DELETE FROM handlers WHERE id = ?", handler_id)
+
+    async def list_versions(self, handler_id: int) -> list[dict[str, Any]]:
         return await self._all(
             "SELECT version, comment, created_at, length(code) AS size FROM handler_versions"
-            " WHERE bot_id = ? ORDER BY version DESC",
-            bot_id,
+            " WHERE handler_id = ? ORDER BY version DESC",
+            handler_id,
         )
 
-    async def get_version(self, bot_id: int, version: int) -> dict[str, Any] | None:
+    async def get_version(self, handler_id: int, version: int) -> dict[str, Any] | None:
         return await self._one(
-            "SELECT * FROM handler_versions WHERE bot_id = ? AND version = ?", bot_id, version
+            "SELECT * FROM handler_versions WHERE handler_id = ? AND version = ?",
+            handler_id,
+            version,
         )
 
-    async def save_version(self, bot_id: int, code: str, comment: str = "") -> int:
+    async def active_code(self, handler_id: int) -> dict[str, Any] | None:
+        """The active version of a handler: version, code, handler name."""
+        return await self._one(
+            """
+            SELECT v.version, v.code, h.name, h.id AS handler_id
+              FROM handlers h JOIN handler_versions v
+                ON v.handler_id = h.id AND v.version = h.active_version
+             WHERE h.id = ?
+            """,
+            handler_id,
+        )
+
+    async def save_version(self, handler_id: int, code: str, comment: str = "") -> int:
         row = await self._one(
-            "SELECT COALESCE(MAX(version), 0) + 1 AS next FROM handler_versions WHERE bot_id = ?",
-            bot_id,
+            "SELECT COALESCE(MAX(version), 0) + 1 AS next FROM handler_versions"
+            " WHERE handler_id = ?",
+            handler_id,
         )
         version = row["next"] if row else 1
         await self.db.execute(
-            "INSERT INTO handler_versions (bot_id, version, code, comment, created_at)"
+            "INSERT INTO handler_versions (handler_id, version, code, comment, created_at)"
             " VALUES (?, ?, ?, ?, ?)",
-            (bot_id, version, code, comment, time.time()),
+            (handler_id, version, code, comment, time.time()),
         )
-        await self.db.execute("UPDATE bots SET active_version = ? WHERE id = ?", (version, bot_id))
+        await self.db.execute(
+            "UPDATE handlers SET active_version = ? WHERE id = ?", (version, handler_id)
+        )
         await self.db.commit()
         return version
 
-    async def activate_version(self, bot_id: int, version: int | None) -> None:
-        await self._exec("UPDATE bots SET active_version = ? WHERE id = ?", version, bot_id)
+    async def activate_version(self, handler_id: int, version: int) -> None:
+        await self._exec("UPDATE handlers SET active_version = ? WHERE id = ?", version, handler_id)
+
+    # Routes
+
+    async def list_routes(self, bot_id: int) -> list[dict[str, Any]]:
+        return await self._all(
+            """
+            SELECT r.*, h.name AS handler_name
+              FROM routes r JOIN handlers h ON h.id = r.handler_id
+             WHERE r.bot_id = ? ORDER BY r.position, r.id
+            """,
+            bot_id,
+        )
+
+    async def get_route(self, bot_id: int, route_id: int) -> dict[str, Any] | None:
+        return await self._one("SELECT * FROM routes WHERE bot_id = ? AND id = ?", bot_id, route_id)
+
+    async def create_route(
+        self,
+        bot_id: int,
+        kind: str,
+        pattern: str,
+        description: str,
+        handler_id: int,
+        enabled: bool = True,
+    ) -> int:
+        row = await self._one(
+            "SELECT COALESCE(MAX(position), 0) + 1 AS next FROM routes WHERE bot_id = ?", bot_id
+        )
+        return await self._exec(
+            "INSERT INTO routes (bot_id, position, kind, pattern, description, handler_id,"
+            " enabled) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            bot_id,
+            row["next"] if row else 1,
+            kind,
+            pattern,
+            description,
+            handler_id,
+            int(enabled),
+        )
+
+    async def update_route(
+        self,
+        route_id: int,
+        kind: str,
+        pattern: str,
+        description: str,
+        handler_id: int,
+        enabled: bool,
+    ) -> None:
+        await self._exec(
+            "UPDATE routes SET kind = ?, pattern = ?, description = ?, handler_id = ?,"
+            " enabled = ? WHERE id = ?",
+            kind,
+            pattern,
+            description,
+            handler_id,
+            int(enabled),
+            route_id,
+        )
+
+    async def set_route_enabled(self, route_id: int, enabled: bool) -> None:
+        await self._exec("UPDATE routes SET enabled = ? WHERE id = ?", int(enabled), route_id)
+
+    async def delete_route(self, route_id: int) -> None:
+        await self._exec("DELETE FROM routes WHERE id = ?", route_id)
+
+    async def reorder_routes(self, bot_id: int, route_ids: list[int]) -> None:
+        """Set positions in the given order; routes not listed keep their relative order last."""
+        current = [r["id"] for r in await self.list_routes(bot_id)]
+        ordered = [i for i in route_ids if i in current]
+        ordered += [i for i in current if i not in ordered]
+        for position, route_id in enumerate(ordered, start=1):
+            await self.db.execute(
+                "UPDATE routes SET position = ? WHERE id = ? AND bot_id = ?",
+                (position, route_id, bot_id),
+            )
+        await self.db.commit()
 
     # Update log
 
@@ -210,8 +493,8 @@ class Database:
         return await self._exec(
             """
             INSERT INTO updates (bot_id, update_id, received_at, kind, from_id, from_name,
-                                 summary, raw, status)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                 summary, raw, status, handler_id, handler_name, route_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             bot_id,
             update.get("update_id", 0),
@@ -220,8 +503,11 @@ class Database:
             fields.get("from_id"),
             fields.get("from_name"),
             fields.get("summary", ""),
-            json.dumps(update, ensure_ascii=False),
+            _json(update),
             fields.get("status", "pending"),
+            fields.get("handler_id"),
+            fields.get("handler_name"),
+            fields.get("route_id"),
         )
 
     async def finish_update(self, row_id: int, **fields: Any) -> None:
@@ -235,8 +521,8 @@ class Database:
             fields.get("handler_version"),
             fields.get("duration_ms"),
             fields.get("error"),
-            json.dumps(fields.get("logs", []), ensure_ascii=False),
-            json.dumps(fields.get("api_calls", []), ensure_ascii=False),
+            _json(fields.get("logs", [])),
+            _json(fields.get("api_calls", [])),
             row_id,
         )
 
@@ -245,7 +531,8 @@ class Database:
     ) -> list[dict[str, Any]]:
         sql = (
             "SELECT id, update_id, received_at, kind, from_id, from_name, summary, status,"
-            " handler_version, duration_ms, error FROM updates WHERE bot_id = ?"
+            " handler_version, handler_name, route_id, duration_ms, error"
+            " FROM updates WHERE bot_id = ?"
         )
         args: list[Any] = [bot_id]
         if status:
@@ -257,16 +544,210 @@ class Database:
 
     async def get_update(self, bot_id: int, row_id: int) -> dict[str, Any] | None:
         row = await self._one("SELECT * FROM updates WHERE bot_id = ? AND id = ?", bot_id, row_id)
-        if row:
-            row["raw"] = json.loads(row["raw"])
-            row["logs"] = json.loads(row["logs"])
-            row["api_calls"] = json.loads(row["api_calls"])
-        return row
+        return _decode(row, "raw", "logs", "api_calls")
 
-    async def prune_updates(self, older_than: float) -> int:
-        cursor = await self.db.execute("DELETE FROM updates WHERE received_at < ?", (older_than,))
-        await self.db.commit()
-        return cursor.rowcount
+    async def recent_senders(self, limit: int = 10) -> list[dict[str, Any]]:
+        """People who wrote to any bot recently, for picking a notification chat."""
+        return await self._all(
+            """
+            SELECT from_id, MAX(from_name) AS from_name, MAX(received_at) AS last_seen
+              FROM updates WHERE from_id IS NOT NULL AND kind != 'schedule'
+             GROUP BY from_id ORDER BY last_seen DESC LIMIT ?
+            """,
+            limit,
+        )
+
+    async def prune(self, older_than: float) -> int:
+        """Remove old update log entries and finished tasks."""
+        removed = await self._change("DELETE FROM updates WHERE received_at < ?", older_than)
+        removed += await self._change(
+            "DELETE FROM tasks WHERE created_at < ? AND status NOT IN ('queued', 'running')",
+            older_than,
+        )
+        return removed
+
+    # Background tasks
+
+    async def create_task(self, bot_id: int, **fields: Any) -> int:
+        return await self._exec(
+            """
+            INSERT INTO tasks (bot_id, handler_id, handler_name, version, code, entry, args,
+                               kwargs, title, origin_update, update_row, status, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?)
+            """,
+            bot_id,
+            fields.get("handler_id"),
+            fields.get("handler_name"),
+            fields.get("version", 0),
+            fields["code"],
+            fields["entry"],
+            _json(fields.get("args", [])),
+            _json(fields.get("kwargs", {})),
+            fields["title"],
+            _json(fields["origin_update"]),
+            fields.get("update_row"),
+            time.time(),
+        )
+
+    async def get_task(self, task_id: int, bot_id: int | None = None) -> dict[str, Any] | None:
+        row = await self._one("SELECT * FROM tasks WHERE id = ?", task_id)
+        if row and bot_id is not None and row["bot_id"] != bot_id:
+            return None
+        return _decode(row, "args", "kwargs", "origin_update", "logs", "api_calls")
+
+    async def list_tasks(
+        self, bot_id: int, status: str | None = None, limit: int = 100
+    ) -> list[dict[str, Any]]:
+        sql = (
+            "SELECT id, handler_name, version, entry, title, status, progress, created_at,"
+            " started_at, finished_at, duration_ms, error, update_row FROM tasks WHERE bot_id = ?"
+        )
+        args: list[Any] = [bot_id]
+        if status:
+            sql += " AND status = ?"
+            args.append(status)
+        sql += " ORDER BY id DESC LIMIT ?"
+        args.append(limit)
+        return await self._all(sql, *args)
+
+    async def queued_tasks(self, limit: int) -> list[dict[str, Any]]:
+        return await self._all(
+            "SELECT id FROM tasks WHERE status = 'queued' ORDER BY id LIMIT ?", limit
+        )
+
+    async def start_task(self, task_id: int, run_id: str) -> bool:
+        """Mark a queued task as running. False if it is no longer queued (e.g. cancelled)."""
+        changed = await self._change(
+            "UPDATE tasks SET status = 'running', run_id = ?, started_at = ?"
+            " WHERE id = ? AND status = 'queued'",
+            run_id,
+            time.time(),
+            task_id,
+        )
+        return changed == 1
+
+    async def finish_task(self, task_id: int, **fields: Any) -> None:
+        await self._exec(
+            """
+            UPDATE tasks SET status = ?, finished_at = ?, duration_ms = ?, error = ?,
+                             logs = ?, api_calls = ?
+             WHERE id = ?
+            """,
+            fields["status"],
+            time.time(),
+            fields.get("duration_ms"),
+            fields.get("error"),
+            _json(fields.get("logs", [])),
+            _json(fields.get("api_calls", [])),
+            task_id,
+        )
+
+    async def set_task_progress(self, task_id: int, text: str) -> None:
+        await self._exec(
+            "UPDATE tasks SET progress = ? WHERE id = ? AND status = 'running'", text, task_id
+        )
+
+    async def cancel_queued_task(self, task_id: int) -> bool:
+        changed = await self._change(
+            "UPDATE tasks SET status = 'cancelled', finished_at = ?, error = 'cancelled'"
+            " WHERE id = ? AND status = 'queued'",
+            time.time(),
+            task_id,
+        )
+        return changed == 1
+
+    async def interrupt_running_tasks(self) -> int:
+        """After a restart, tasks that were running have lost their runner call."""
+        return await self._change(
+            "UPDATE tasks SET status = 'interrupted', finished_at = ?,"
+            " error = 'the orchestrator restarted while the task was running'"
+            " WHERE status = 'running'",
+            time.time(),
+        )
+
+    # Schedules
+
+    async def list_schedules(self, bot_id: int) -> list[dict[str, Any]]:
+        return await self._all(
+            """
+            SELECT s.*, h.name AS handler_name
+              FROM schedules s JOIN handlers h ON h.id = s.handler_id
+             WHERE s.bot_id = ? ORDER BY s.name
+            """,
+            bot_id,
+        )
+
+    async def get_schedule(self, bot_id: int, schedule_id: int) -> dict[str, Any] | None:
+        return await self._one(
+            "SELECT * FROM schedules WHERE bot_id = ? AND id = ?", bot_id, schedule_id
+        )
+
+    async def due_schedules(self, now: float) -> list[dict[str, Any]]:
+        return await self._all(
+            """
+            SELECT s.* FROM schedules s JOIN bots b ON b.id = s.bot_id
+             WHERE s.enabled = 1 AND s.next_run_at IS NOT NULL AND s.next_run_at <= ?
+               AND b.status = 'running'
+             ORDER BY s.next_run_at
+            """,
+            now,
+        )
+
+    async def all_schedules(self) -> list[dict[str, Any]]:
+        return await self._all("SELECT * FROM schedules")
+
+    async def create_schedule(self, bot_id: int, **fields: Any) -> int:
+        return await self._exec(
+            """
+            INSERT INTO schedules (bot_id, name, cron, handler_id, chat_id, enabled,
+                                   next_run_at, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            bot_id,
+            fields["name"],
+            fields["cron"],
+            fields["handler_id"],
+            fields.get("chat_id"),
+            int(fields.get("enabled", True)),
+            fields.get("next_run_at"),
+            time.time(),
+        )
+
+    async def update_schedule(self, schedule_id: int, **fields: Any) -> None:
+        await self._exec(
+            """
+            UPDATE schedules SET name = ?, cron = ?, handler_id = ?, chat_id = ?, enabled = ?,
+                                 next_run_at = ?
+             WHERE id = ?
+            """,
+            fields["name"],
+            fields["cron"],
+            fields["handler_id"],
+            fields.get("chat_id"),
+            int(fields.get("enabled", True)),
+            fields.get("next_run_at"),
+            schedule_id,
+        )
+
+    async def set_schedule_next(self, schedule_id: int, next_run_at: float | None) -> None:
+        await self._exec(
+            "UPDATE schedules SET next_run_at = ? WHERE id = ?", next_run_at, schedule_id
+        )
+
+    async def record_schedule_run(
+        self, schedule_id: int, status: str, update_row: int | None
+    ) -> None:
+        await self._exec(
+            "UPDATE schedules SET last_run_at = ?, last_status = ?, last_update_row = ?"
+            " WHERE id = ?",
+            time.time(),
+            status,
+            update_row,
+            schedule_id,
+        )
+
+    async def delete_schedule(self, schedule_id: int) -> None:
+        await self._exec("DELETE FROM schedules WHERE id = ?", schedule_id)
 
     # Console history
 
@@ -322,7 +803,7 @@ class Database:
 
     # Key-value storage
 
-    async def kv_get(self, bot_id: int, key: str) -> Any:
+    async def kv_get(self, bot_id: int, key: str) -> tuple[bool, Any]:
         row = await self._one("SELECT value FROM kv WHERE bot_id = ? AND key = ?", bot_id, key)
         return (True, json.loads(row["value"])) if row else (False, None)
 
@@ -333,7 +814,7 @@ class Database:
             " updated_at = excluded.updated_at",
             bot_id,
             key,
-            json.dumps(value, ensure_ascii=False),
+            _json(value),
             time.time(),
         )
 
@@ -343,4 +824,18 @@ class Database:
     async def kv_list(self, bot_id: int) -> list[dict[str, Any]]:
         return await self._all(
             "SELECT key, value, updated_at FROM kv WHERE bot_id = ? ORDER BY key", bot_id
+        )
+
+    # Application settings
+
+    async def get_setting(self, key: str, default: Any = None) -> Any:
+        row = await self._one("SELECT value FROM app_settings WHERE key = ?", key)
+        return json.loads(row["value"]) if row else default
+
+    async def set_setting(self, key: str, value: Any) -> None:
+        await self._exec(
+            "INSERT INTO app_settings (key, value) VALUES (?, ?)"
+            " ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            key,
+            _json(value),
         )

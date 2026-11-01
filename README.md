@@ -3,22 +3,35 @@
 A self-hosted control panel for running many Telegram bots on top of a single
 [local Telegram Bot API server](https://github.com/tdlib/telegram-bot-api).
 
-> **Status:** MVP. Works end to end; expect breaking changes before 1.0.
+> **Status:** 0.2. Works end to end; expect breaking changes before 1.0.
 
 ## Features
 
-- **Web UI** for all your bots: status, updates and errors over the last 24 hours.
+- **Web UI** for all your bots: status, routes, active tasks, updates and errors
+  over the last 24 hours.
 - **Add a bot with a button.** Paste a token; the orchestrator logs the bot out of
   the cloud Bot API (`deleteWebhook` + `logOut`), checks it with `getMe` and starts
   polling. Bots are database records, so `docker-compose.yml` never changes.
-- **Handlers as code.** Write a Python `handle(update, ctx)` in the browser
-  (Monaco editor). Every save is a version; roll back with one click.
+- **Routes.** Send updates to handlers by command, regex, content type, button
+  data or update type. Drag to reorder, check which route matches a logged
+  update, publish command routes to the bot menu.
+- **Handlers as code.** Several Python handlers per bot, written in the browser
+  (Monaco editor with suggestions for the SDK and Telegram types) or started
+  from templates. Every save is a version; roll back with one click.
+- **Background tasks.** `await ctx.background(func, ...)` runs long work (for
+  example a yt-dlp download with `ctx.download`) outside the handler's time
+  limit, with progress, cancel and retry in the UI.
+- **Schedules.** Cron expressions that run a handler, with a preview of the next
+  runs and "Run now".
 - **Test runs.** Run the code in the editor on a real logged update before saving.
   Dry runs record Bot API calls instead of sending them.
-- **Update log.** Each update with its sender, result, duration, handler output,
-  Bot API calls and the raw JSON.
+- **Update log.** Each update with its route, handler, result, duration, output,
+  Bot API calls, started tasks and the raw JSON.
+- **Notifications.** Handler, task and schedule failures, a stopped bot, an
+  unreachable runner or a full disk are sent to you in Telegram.
 - **Bot API console.** Call any method from the browser, with history.
-- **Files.** Browse, download and delete what handlers saved.
+- **Files.** Browse, download and delete what handlers saved; the Bot API file
+  cache is cleaned automatically.
 - **Settings per bot.** Allowed users, encrypted secrets, stored key-value data,
   pause/resume, moving the bot back to the cloud API.
 
@@ -28,16 +41,28 @@ panel or other bots.
 
 ## Example handler
 
+A route "text matches regex `https?://\S+`" sends links here:
+
 ```python
+import re
+
+URL = re.compile(r"https?://\S+")
+
+
 async def handle(update, ctx):
-    msg = update.message
-    if msg and msg.document:
-        path = await ctx.files.local_path(msg.document.file_id)  # up to 2 GB
-        saved = ctx.files.move(path, "inbox/" + ctx.files.safe_name(msg.document.file_name))
-        await ctx.reply(f"Saved {saved.name}")
+    found = URL.search(update.message.text or "")
+    if found:
+        await ctx.background(fetch, found.group(0), title=found.group(0))
+        await ctx.reply("Queued.")
+
+
+async def fetch(ctx, url):
+    """Runs as a background task."""
+    result = await ctx.download(url)  # yt-dlp, with a progress message in the chat
+    await ctx.reply_file(result.path, caption=result.title)  # up to 2 GB
 ```
 
-The full SDK reference is on the Handler tab and in
+The full SDK reference is on the handler page and in
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#handler-sdk).
 
 ## Quick start

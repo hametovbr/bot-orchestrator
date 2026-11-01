@@ -37,6 +37,21 @@ class Settings(BaseSettings):
     # Mark the session cookie Secure (enable when the UI is served over HTTPS).
     secure_cookies: bool = False
 
+    # Data directory of the local Bot API server (same path in every container).
+    bot_api_data_dir: str = "/var/lib/telegram-bot-api"
+    # Delete files the Bot API server downloaded after this many hours (0 keeps them).
+    cache_retention_hours: int = 24
+    # Background tasks running at the same time (across all bots).
+    task_concurrency: int = 2
+    # HTTP timeout for a background task call; keep it above the runner's TASK_TIMEOUT.
+    task_request_timeout: float = 7200.0
+    # Public address of the UI, used for links in notifications, e.g. https://bots.example.com
+    public_url: str = ""
+    # Timezone for schedules (IANA name). Read from the standard TZ variable.
+    tz: str = "UTC"
+    # Send a notification when the disk with bot files is fuller than this, in percent.
+    disk_warning_percent: int = 90
+
 
 @lru_cache
 def get_settings() -> Settings:

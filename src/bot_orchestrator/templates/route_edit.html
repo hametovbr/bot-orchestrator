@@ -1,0 +1,17 @@
+{% extends "bot_base.html" %}
+{% block tab %}
+<p><a class="muted small" href="/bots/{{ bot.id }}/routes">← Routes</a></p>
+<section class="card">
+  <h2>Edit route</h2>
+  {% set action = "/bots/" ~ bot.id ~ "/routes/" ~ route.id %}
+  {% include "_route_form.html" %}
+</section>
+<form method="post" action="/bots/{{ bot.id }}/routes/{{ route.id }}/delete" data-confirm="Delete this route?">
+  <button class="danger">Delete route</button>
+</form>
+{% endblock %}
+
+{% block scripts %}
+<script>window.BOT_ID = {{ bot.id }}; window.PATTERN_HELP = {{ help | tojson }};</script>
+<script src="/static/routes.js"></script>
+{% endblock %}
