@@ -1,5 +1,5 @@
 {% extends "bot_base.html" %}
-{% from "_macros.html" import status_badge, api_calls %}
+{% from "_macros.html" import status_badge, api_calls, missing_module_hint %}
 {% block tab %}
 <p><a class="muted small" href="/bots/{{ bot.id }}/updates">← Updates</a></p>
 <div class="kv-grid">
@@ -29,6 +29,7 @@
 {% if u.error %}
 <h2>Error</h2>
 <pre class="code error">{{ u.error }}</pre>
+{{ missing_module_hint(u.error) }}
 {% endif %}
 
 <h2>Log</h2>

@@ -146,6 +146,8 @@
   const CONTEXT_TYPES = { Context: 1 };
 
   function rootType(name) {
+    if (name === "shared") return "Shared";
+    if (TYPES["Module:" + name]) return "Module:" + name;
     if (name === "ctx") return "Context";
     if (name === "update") return "Update";
     if (/^(msg|message|reply|sent)$/.test(name)) return "Message";
@@ -170,9 +172,32 @@
     return type;
   }
 
+  // Shared modules: shared.<name> and names imported with `from shared import <name>`.
+  async function loadModules() {
+    try {
+      const response = await fetch("/modules-hints.json");
+      const modules = await response.json();
+      TYPES.Shared = {};
+      for (const [name, module] of Object.entries(modules)) {
+        TYPES.Shared[name] = F("Module:" + name, module.doc || `Shared module ${name}.`);
+        const members = {};
+        for (const item of module.items) {
+          const doc = [item.signature, item.doc].filter(Boolean).join("\n\n");
+          members[item.name] = item.kind === "function"
+            ? M(`${item.name}(\${1})`, doc)
+            : F(null, doc);
+        }
+        TYPES["Module:" + name] = members;
+      }
+    } catch {
+      /* suggestions for shared modules are optional */
+    }
+  }
+
   window.registerSdkHints = function (monaco) {
     const Kind = monaco.languages.CompletionItemKind;
     const Snippet = monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet;
+    loadModules();
 
     monaco.languages.registerCompletionItemProvider("python", {
       triggerCharacters: ["."],
@@ -227,6 +252,7 @@
         ["background task", "async def ${1:work}(ctx, ${2:value}):\n    \"\"\"Runs as a background task.\"\"\"\n    ${3:pass}", "A function to start with ctx.background(...)."],
         ["download and send", "result = await ctx.download(${1:url})\nawait ctx.reply_file(result.path, caption=result.title)", "Download with yt-dlp and send the file."],
         ["save incoming file", "path = await ctx.files.local_path(${1:update.message.document}.file_id)\nsaved = ctx.files.move(path, f\"inbox/{ctx.files.safe_name(${1:update.message.document}.file_name)}\")", "Save a file from a message to the bot folder."],
+        ["import shared module", "from shared import ${1:name}", "Import a module from the Modules page."],
         ["inline button", "reply_markup={\"inline_keyboard\": [[{\"text\": \"${1:Label}\", \"callback_data\": \"${2:data}\"}]]}", "Keyboard argument for ctx.reply."],
       ];
       return items.map(([label, text, doc]) => ({

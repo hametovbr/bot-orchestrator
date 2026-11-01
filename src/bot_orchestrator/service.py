@@ -18,6 +18,7 @@ from . import cron, maintenance
 from .config import Settings
 from .db import Database
 from .notify import Notifier
+from .packages import Packages
 from .routing import find_route
 from .security import Cipher, mask, mask_value
 from .telegram import BotApi, TelegramError
@@ -45,6 +46,7 @@ class Orchestrator:
         self.cipher = Cipher(settings.secret_key)
         self.http = http or httpx.AsyncClient(timeout=httpx.Timeout(30.0))
         self.notifier = Notifier(self)
+        self.packages = Packages(self)
         self.tasks = TaskManager(self)
         self.timezone = ZoneInfo(settings.tz)
         self._pollers: dict[int, asyncio.Task] = {}
@@ -59,6 +61,8 @@ class Orchestrator:
             if bot["status"] == "running":
                 self._start_poller(bot["id"])
         await self.tasks.start()
+        # Reinstall the saved packages if the runner lost them; never block startup on it.
+        self.spawn(self.packages.sync())
         await self._refresh_schedules()
         self._loops = [
             asyncio.create_task(self._maintenance_loop(), name="maintenance"),
@@ -333,6 +337,7 @@ class Orchestrator:
         task: dict[str, Any] | None = None,
         origin: dict[str, Any] | None = None,
         run_id: str | None = None,
+        modules: dict[str, dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         """Send one job to the runner and return its result."""
         payload = {
@@ -347,6 +352,7 @@ class Orchestrator:
             "kwargs": kwargs or {},
             "task": task,
             "origin": origin or {},
+            "modules": modules if modules is not None else await self.db.active_modules(),
             "update": update,
             "secrets": await self.secrets_of(bot["id"]),
             "dry_run": dry_run,
@@ -533,6 +539,7 @@ class Orchestrator:
                         "disk",
                         f"💾 The disk with bot files is {used:.0f}% full.",
                     )
+                await self.packages.sync()
             except Exception:  # noqa: BLE001 - keep the loop alive
                 log.exception("maintenance failed")
             await asyncio.sleep(600)
@@ -564,7 +571,9 @@ class TaskManager:
     def is_running(self, task_id: int) -> bool:
         return task_id in self._running
 
-    async def enqueue(self, bot_id: int, data: dict[str, Any]) -> int:
+    async def enqueue(
+        self, bot_id: int, data: dict[str, Any], modules: dict[str, int] | None = None
+    ) -> int:
         """Store a task started by ctx.background() and wake the dispatcher."""
         await self._o.require_bot(bot_id)
         handler = data.get("handler") or {}
@@ -584,6 +593,10 @@ class TaskManager:
             title=str(data.get("title") or data["entry"])[:200],
             origin_update=data.get("update") or {},
             update_row=origin.get("update_row"),
+            # Module versions are pinned when the task is queued, like the handler code.
+            modules=modules
+            if modules is not None
+            else {name: m["version"] for name, m in (await self._o.db.active_modules()).items()},
         )
         self._wake.set()
         return task_id
@@ -608,6 +621,7 @@ class TaskManager:
                 "update": task["origin_update"],
                 "origin": {"update_row": task["update_row"]},
             },
+            modules=task["modules"],
         )
 
     async def cancel(self, task_id: int) -> bool:
@@ -669,6 +683,9 @@ class TaskManager:
                     task={"id": task_id, "title": task["title"]},
                     origin={"update_row": task["update_row"], "task_id": task_id},
                     run_id=run_id,
+                    modules=await db.modules_at(task["modules"])
+                    if task["modules"]
+                    else await db.active_modules(),
                 )
                 if task_id in self._cancel_requested:
                     result = {**result, "status": "cancelled", "error": "cancelled"}

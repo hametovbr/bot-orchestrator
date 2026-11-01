@@ -9,7 +9,7 @@ from typing import Any
 
 import aiosqlite
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 # Tables shared by every schema version.
 BASE_SCHEMA = """
@@ -183,6 +183,29 @@ DROP TABLE handler_versions_v1;
 )
 
 
+# Added in version 3: shared modules, importable by every handler as shared.<name>.
+MIGRATE_2_TO_3 = """
+CREATE TABLE modules (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    name            TEXT NOT NULL UNIQUE,
+    active_version  INTEGER,
+    created_at      REAL NOT NULL
+);
+
+CREATE TABLE module_versions (
+    module_id   INTEGER NOT NULL REFERENCES modules(id) ON DELETE CASCADE,
+    version     INTEGER NOT NULL,
+    code        TEXT NOT NULL,
+    comment     TEXT NOT NULL DEFAULT '',
+    created_at  REAL NOT NULL,
+    PRIMARY KEY (module_id, version)
+);
+
+-- {module name: version} active when the task was queued.
+ALTER TABLE tasks ADD COLUMN modules TEXT NOT NULL DEFAULT '{}';
+"""
+
+
 def _row(row: aiosqlite.Row | None) -> dict[str, Any] | None:
     return dict(row) if row is not None else None
 
@@ -223,9 +246,11 @@ class Database:
         if version >= SCHEMA_VERSION:
             return
         if not has_tables:
-            script = BASE_SCHEMA + V2_TABLES + V2_UPDATE_COLUMNS
+            script = BASE_SCHEMA + V2_TABLES + V2_UPDATE_COLUMNS + MIGRATE_2_TO_3
         elif version in (0, 1):
-            script = MIGRATE_1_TO_2
+            script = MIGRATE_1_TO_2 + MIGRATE_2_TO_3
+        elif version == 2:
+            script = MIGRATE_2_TO_3
         else:
             raise RuntimeError(f"unknown database schema version {version}")
         # One transaction: a failed migration leaves the database untouched.
@@ -572,8 +597,9 @@ class Database:
         return await self._exec(
             """
             INSERT INTO tasks (bot_id, handler_id, handler_name, version, code, entry, args,
-                               kwargs, title, origin_update, update_row, status, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?)
+                               kwargs, title, origin_update, update_row, modules, status,
+                               created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?)
             """,
             bot_id,
             fields.get("handler_id"),
@@ -586,6 +612,7 @@ class Database:
             fields["title"],
             _json(fields["origin_update"]),
             fields.get("update_row"),
+            _json(fields.get("modules", {})),
             time.time(),
         )
 
@@ -593,7 +620,7 @@ class Database:
         row = await self._one("SELECT * FROM tasks WHERE id = ?", task_id)
         if row and bot_id is not None and row["bot_id"] != bot_id:
             return None
-        return _decode(row, "args", "kwargs", "origin_update", "logs", "api_calls")
+        return _decode(row, "args", "kwargs", "origin_update", "logs", "api_calls", "modules")
 
     async def list_tasks(
         self, bot_id: int, status: str | None = None, limit: int = 100
@@ -824,6 +851,118 @@ class Database:
     async def kv_list(self, bot_id: int) -> list[dict[str, Any]]:
         return await self._all(
             "SELECT key, value, updated_at FROM kv WHERE bot_id = ? ORDER BY key", bot_id
+        )
+
+    # Shared modules
+
+    async def list_modules(self) -> list[dict[str, Any]]:
+        return await self._all(
+            """
+            SELECT m.*,
+                   (SELECT MAX(version) FROM module_versions v
+                     WHERE v.module_id = m.id) AS latest_version,
+                   (SELECT MAX(created_at) FROM module_versions v
+                     WHERE v.module_id = m.id) AS updated_at
+              FROM modules m ORDER BY m.name
+            """
+        )
+
+    async def get_module(self, module_id: int) -> dict[str, Any] | None:
+        return await self._one("SELECT * FROM modules WHERE id = ?", module_id)
+
+    async def get_module_by_name(self, name: str) -> dict[str, Any] | None:
+        return await self._one("SELECT * FROM modules WHERE name = ?", name)
+
+    async def create_module(self, name: str, code: str, comment: str = "") -> int:
+        cursor = await self.db.execute(
+            "INSERT INTO modules (name, active_version, created_at) VALUES (?, 1, ?)",
+            (name, time.time()),
+        )
+        module_id = cursor.lastrowid
+        await self.db.execute(
+            "INSERT INTO module_versions (module_id, version, code, comment, created_at)"
+            " VALUES (?, 1, ?, ?, ?)",
+            (module_id, code, comment, time.time()),
+        )
+        await self.db.commit()
+        return module_id
+
+    async def save_module_version(self, module_id: int, code: str, comment: str = "") -> int:
+        row = await self._one(
+            "SELECT COALESCE(MAX(version), 0) + 1 AS next FROM module_versions WHERE module_id = ?",
+            module_id,
+        )
+        version = row["next"] if row else 1
+        await self.db.execute(
+            "INSERT INTO module_versions (module_id, version, code, comment, created_at)"
+            " VALUES (?, ?, ?, ?, ?)",
+            (module_id, version, code, comment, time.time()),
+        )
+        await self.db.execute(
+            "UPDATE modules SET active_version = ? WHERE id = ?", (version, module_id)
+        )
+        await self.db.commit()
+        return version
+
+    async def activate_module_version(self, module_id: int, version: int) -> None:
+        await self._exec("UPDATE modules SET active_version = ? WHERE id = ?", version, module_id)
+
+    async def list_module_versions(self, module_id: int) -> list[dict[str, Any]]:
+        return await self._all(
+            "SELECT version, comment, created_at, length(code) AS size FROM module_versions"
+            " WHERE module_id = ? ORDER BY version DESC",
+            module_id,
+        )
+
+    async def get_module_version(self, module_id: int, version: int) -> dict[str, Any] | None:
+        return await self._one(
+            "SELECT * FROM module_versions WHERE module_id = ? AND version = ?",
+            module_id,
+            version,
+        )
+
+    async def delete_module(self, module_id: int) -> None:
+        await self._exec("DELETE FROM modules WHERE id = ?", module_id)
+
+    async def active_modules(self) -> dict[str, dict[str, Any]]:
+        """{name: {"version": n, "code": "..."}} for the active version of every module."""
+        rows = await self._all(
+            """
+            SELECT m.name, v.version, v.code
+              FROM modules m JOIN module_versions v
+                ON v.module_id = m.id AND v.version = m.active_version
+            """
+        )
+        return {r["name"]: {"version": r["version"], "code": r["code"]} for r in rows}
+
+    async def modules_at(self, versions: dict[str, int]) -> dict[str, dict[str, Any]]:
+        """Code of the given module versions; modules deleted since are left out."""
+        found = {}
+        for name, version in versions.items():
+            row = await self._one(
+                """
+                SELECT v.version, v.code FROM modules m JOIN module_versions v
+                    ON v.module_id = m.id
+                 WHERE m.name = ? AND v.version = ?
+                """,
+                name,
+                int(version),
+            )
+            if row:
+                found[name] = {"version": row["version"], "code": row["code"]}
+        return found
+
+    async def active_handler_code(self) -> list[dict[str, Any]]:
+        """Active code of every handler of every bot, for finding module imports."""
+        return await self._all(
+            """
+            SELECT h.id AS handler_id, h.name AS handler_name, b.id AS bot_id,
+                   b.username AS bot_username, v.code
+              FROM handlers h
+              JOIN bots b ON b.id = h.bot_id
+              JOIN handler_versions v ON v.handler_id = h.id AND v.version = h.active_version
+             ORDER BY b.username, h.name
+            """
         )
 
     # Application settings

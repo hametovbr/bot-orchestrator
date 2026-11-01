@@ -29,6 +29,17 @@
 {% else %}<p class="muted">No Bot API calls.</p>{% endif %}
 {%- endmacro %}
 
+{% macro missing_module_hint(error) -%}
+{% set found = error | missing_module %}
+{% if found %}
+{% if found.startswith("shared.") %}
+<p class="small">There is no shared module <code>{{ found[7:] }}</code>. Create it on the <a href="/modules">Modules</a> page.</p>
+{% else %}
+<p class="small">Package <code>{{ found.split(".")[0] }}</code> is not installed. Add it on the <a href="/packages">Packages</a> page.</p>
+{% endif %}
+{% endif %}
+{%- endmacro %}
+
 {% macro handler_options(handlers, selected=None) -%}
 {% for h in handlers %}
 <option value="{{ h.id }}" {% if h.id == selected %}selected{% endif %}>{{ h.name }}</option>

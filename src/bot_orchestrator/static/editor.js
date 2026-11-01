@@ -1,8 +1,11 @@
-// Handler editor: Monaco when the CDN is reachable, a plain textarea otherwise.
+// Code editor pages (handlers and shared modules): Monaco when the CDN is reachable,
+// a plain textarea otherwise, plus the test-run panel.
+// The page sets window.CODE_PAGE = { testUrl, extra?: () => object, confirmText? }.
 
 (function () {
   const textarea = document.getElementById("code");
   const editorBox = document.getElementById("editor");
+  const page = window.CODE_PAGE || {};
   let editor = null;
 
   function currentCode() {
@@ -48,6 +51,7 @@
 
   const select = document.getElementById("test-update");
   const jsonBox = document.getElementById("test-json");
+  if (!select || !page.testUrl) return;
   select.addEventListener("change", function () {
     jsonBox.classList.toggle("hidden", select.value !== "json");
   });
@@ -55,16 +59,19 @@
   const result = document.getElementById("test-result");
   const button = document.getElementById("test-run");
   button.addEventListener("click", async function () {
-    const body = { code: currentCode(), dry_run: document.getElementById("test-dry").checked };
+    const body = {
+      code: currentCode(),
+      dry_run: document.getElementById("test-dry").checked,
+      ...(page.extra ? page.extra() : {}),
+    };
     if (select.value === "json") body.update_json = jsonBox.value;
     else body.update_row = Number(select.value);
-    if (!body.dry_run && !confirm("Not a dry run: the handler will really send messages. Continue?")) {
-      return;
-    }
+    const warning = page.confirmText || "Not a dry run: the handler will really send messages. Continue?";
+    if (!body.dry_run && !confirm(warning)) return;
     button.disabled = true;
     result.innerHTML = '<p class="muted">Running…</p>';
     try {
-      result.innerHTML = renderRunResult(await postJson(`/bots/${window.BOT_ID}/handlers/${window.HANDLER_ID}/test`, body));
+      result.innerHTML = renderRunResult(await postJson(page.testUrl, body));
     } catch (err) {
       result.innerHTML = `<div class="flash flash-error">${escapeHtml(err.message)}</div>`;
     } finally {

@@ -24,10 +24,24 @@ async function postJson(url, body) {
   return data;
 }
 
+// A short hint when an import fails because a package or shared module is missing.
+function missingModuleHint(error) {
+  const found = /No module named '([^']+)'/.exec(error || "");
+  if (!found) return "";
+  const name = found[1];
+  if (name.startsWith("shared.")) {
+    return `<p class="small">There is no shared module <code>${escapeHtml(name.slice(7))}</code>. Create it on the <a href="/modules">Modules</a> page.</p>`;
+  }
+  return `<p class="small">Package <code>${escapeHtml(name.split(".")[0])}</code> is not installed. Add it on the <a href="/packages">Packages</a> page.</p>`;
+}
+
 function renderRunResult(result) {
   const badge = `<span class="badge badge-${escapeHtml(result.status)}">${escapeHtml(result.status.replace("_", " "))}</span>`;
   let html = `<p>${badge} <span class="muted">${result.duration_ms ?? "?"} ms</span></p>`;
-  if (result.error) html += `<pre class="code error">${escapeHtml(result.error)}</pre>`;
+  if (result.error) {
+    html += `<pre class="code error">${escapeHtml(result.error)}</pre>`;
+    html += missingModuleHint(result.error);
+  }
   if (result.logs && result.logs.length) {
     html += `<h3>Log</h3><pre class="code">${escapeHtml(result.logs.join("\n"))}</pre>`;
   }

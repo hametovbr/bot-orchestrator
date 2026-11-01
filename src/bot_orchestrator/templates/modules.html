@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block title %}Modules · Bot Orchestrator{% endblock %}
+{% block content %}
+<h1>Shared modules</h1>
+<p class="muted small">Code every handler of every bot can import: <code>from shared import name</code>.
+  Saving a module changes it for all its users at once; background tasks keep the versions they were queued with.</p>
+
+{% if modules %}
+<table class="table">
+  <thead><tr><th>Module</th><th>Active version</th><th>Used by</th><th>Last saved</th></tr></thead>
+  <tbody>
+  {% for m in modules %}
+    <tr class="clickable" data-href="/modules/{{ m.id }}">
+      <td><a href="/modules/{{ m.id }}"><strong>shared.{{ m.name }}</strong></a>
+        {% if m.doc %}<div class="muted small ellipsis">{{ m.doc.splitlines()[0] }}</div>{% endif %}</td>
+      <td>v{{ m.active_version }}{% if m.latest_version != m.active_version %} <span class="muted small">(latest v{{ m.latest_version }})</span>{% endif %}</td>
+      <td class="small">{% for u in m.users %}<a href="{{ u.url }}">{{ u.label }}</a>{% if not loop.last %}, {% endif %}{% else %}<span class="muted">nobody yet</span>{% endfor %}</td>
+      <td class="small nowrap">{{ m.updated_at | time }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p class="muted">No modules yet.</p>
+{% endif %}
+
+<section class="card">
+  <h2>New module</h2>
+  <form method="post" action="/modules" class="row">
+    <input type="text" name="name" required pattern="[a-z_][a-z0-9_]{0,39}" placeholder="downloads" spellcheck="false" class="grow mono">
+    <button class="primary">Create</button>
+  </form>
+  <p class="muted small">Lowercase letters, digits and _. The name becomes the import: <code>from shared import downloads</code>.
+    Modules can import each other and the packages from the <a href="/packages">Packages</a> page.</p>
+</section>
+{% endblock %}

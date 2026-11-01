@@ -97,14 +97,16 @@
       <tr><td><code>ctx.log(...)</code>, <code>print(...)</code></td><td>Write to the update log.</td></tr>
       <tr><td><code>await ctx.http.get(url)</code></td><td>An <code>httpx.AsyncClient</code> for outside requests.</td></tr>
       <tr><td><code>await ctx.shell("ffmpeg", …)</code></td><td>Run a program in the bot folder; returns <code>returncode</code>, <code>stdout</code>, <code>stderr</code>.</td></tr>
+      <tr><td><code>from shared import name</code></td><td>Code from <a href="/modules">shared modules</a>, common to all bots.</td></tr>
+      <tr><td><code>import pillow_heif</code>, …</td><td>Extra libraries from the <a href="/packages">Packages</a> page.</td></tr>
     </tbody>
   </table>
 </details>
 {% endblock %}
 
 {% block scripts %}
-<script>window.BOT_ID = {{ bot.id }}; window.HANDLER_ID = {{ handler.id }};</script>
+<script>window.CODE_PAGE = { testUrl: "/bots/{{ bot.id }}/handlers/{{ handler.id }}/test" };</script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.52.2/min/vs/loader.min.js"></script>
 <script src="/static/sdk_hints.js"></script>
-<script src="/static/handler.js"></script>
+<script src="/static/editor.js"></script>
 {% endblock %}

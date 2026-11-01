@@ -13,6 +13,8 @@
     {% if request.session.get("auth") %}
     <nav class="topnav">
       <a href="/" class="{% if request.url.path == '/' or request.url.path.startswith('/bots') %}active{% endif %}">Bots</a>
+      <a href="/modules" class="{% if request.url.path.startswith('/modules') %}active{% endif %}">Modules</a>
+      <a href="/packages" class="{% if request.url.path.startswith('/packages') %}active{% endif %}">Packages</a>
       <a href="/settings" class="{% if request.url.path == '/settings' %}active{% endif %}">Settings</a>
       <form method="post" action="/logout"><button class="link">Log out</button></form>
     </nav>

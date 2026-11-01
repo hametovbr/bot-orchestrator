@@ -3,7 +3,7 @@
 A self-hosted control panel for running many Telegram bots on top of a single
 [local Telegram Bot API server](https://github.com/tdlib/telegram-bot-api).
 
-> **Status:** 0.2. Works end to end; expect breaking changes before 1.0.
+> **Status:** 0.3. Works end to end; expect breaking changes before 1.0.
 
 ## Features
 
@@ -18,6 +18,11 @@ A self-hosted control panel for running many Telegram bots on top of a single
 - **Handlers as code.** Several Python handlers per bot, written in the browser
   (Monaco editor with suggestions for the SDK and Telegram types) or started
   from templates. Every save is a version; roll back with one click.
+- **Shared modules.** Code common to all bots, imported with
+  `from shared import name`, with versions, a list of who uses it and test runs
+  of the unsaved code through any handler.
+- **Packages.** Extra Python libraries for handlers from a `requirements.txt`-style
+  list; installed by the runner with uv, switched only after a successful install.
 - **Background tasks.** `await ctx.background(func, ...)` runs long work (for
   example a yt-dlp download with `ctx.download`) outside the handler's time
   limit, with progress, cancel and retry in the UI.

@@ -1,0 +1,91 @@
+{% extends "base.html" %}
+{% block title %}shared.{{ module.name }} · Bot Orchestrator{% endblock %}
+{% block content %}
+<p><a class="muted small" href="/modules">← Modules</a></p>
+<div class="toolbar">
+  <h1 class="inline">shared.{{ module.name }}</h1>
+  <span class="muted small">
+    {% if users %}Used by {% for u in users %}<a href="{{ u.url }}">{{ u.label }}</a>{% if not loop.last %}, {% endif %}{% endfor %}
+    {% else %}Not imported anywhere yet: <code>from shared import {{ module.name }}</code>{% endif %}
+  </span>
+</div>
+
+<form method="post" action="/modules/{{ module.id }}" id="save-form" class="stack">
+  <div class="toolbar">
+    <span>Editing version <strong>{{ shown_version }}</strong>
+      {% if shown_version == module.active_version %}<span class="badge badge-ok">active</span>{% else %}<span class="badge badge-paused">not active</span>{% endif %}
+    </span>
+    <input type="text" name="comment" placeholder="What changed (optional)" maxlength="200" class="grow">
+    <button class="primary">Save and activate</button>
+  </div>
+  <div id="editor" class="editor"></div>
+  <textarea name="code" id="code" class="code-fallback" spellcheck="false">{{ code }}</textarea>
+</form>
+
+<div class="columns">
+  <section class="card">
+    <h2>Test run</h2>
+    <p class="muted small">Runs a handler's active code with the module code from the editor (saved or not).
+      In a dry run only <code>get*</code> Bot API methods reach Telegram.</p>
+    {% if handlers %}
+    <div class="stack">
+      <label>Handler
+        <select id="test-handler">
+          {% for h in handlers %}
+          <option value="{{ h.handler_id }}" data-bot="{{ h.bot_id }}">@{{ h.bot_username }} · {{ h.handler_name }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label>Update
+        <select id="test-update"><option value="json">Custom JSON…</option></select>
+      </label>
+      <textarea id="test-json" class="mono hidden" rows="8" spellcheck="false">{"update_id": 1, "message": {"message_id": 1, "date": 0, "chat": {"id": 1, "type": "private"}, "from": {"id": 1, "is_bot": false, "first_name": "Test"}, "text": "hello"}}</textarea>
+      <label class="check"><input type="checkbox" id="test-dry" checked> <span>Dry run</span></label>
+      <div><button type="button" id="test-run">Run</button></div>
+      <div id="test-result"></div>
+    </div>
+    {% else %}
+    <p class="muted">Create a handler on a bot to test the module through it.</p>
+    {% endif %}
+  </section>
+
+  <section class="card">
+    <h2>Versions</h2>
+    <table class="table compact">
+      <tbody>
+      {% for v in versions %}
+        <tr>
+          <td><a href="?version={{ v.version }}">v{{ v.version }}</a>
+            {% if v.version == module.active_version %}<span class="badge badge-ok">active</span>{% endif %}</td>
+          <td class="muted small">{{ v.created_at | time }}<div>{{ v.comment }}</div></td>
+          <td class="right">{% if v.version != module.active_version %}
+            <form method="post" action="/modules/{{ module.id }}/activate">
+              <input type="hidden" name="version" value="{{ v.version }}"><button class="small">Activate</button>
+            </form>{% endif %}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    <form method="post" action="/modules/{{ module.id }}/delete" class="space-top"
+          data-confirm="Delete shared.{{ module.name }} with all its versions?">
+      <button class="small danger">Delete module</button>
+    </form>
+  </section>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  window.CODE_PAGE = {
+    testUrl: "/modules/{{ module.id }}/test",
+    extra: function () {
+      const option = document.querySelector("#test-handler option:checked");
+      return { handler_id: Number(option.value), bot_id: Number(option.dataset.bot) };
+    },
+  };
+</script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.52.2/min/vs/loader.min.js"></script>
+<script src="/static/sdk_hints.js"></script>
+<script src="/static/editor.js"></script>
+<script src="/static/module.js"></script>
+{% endblock %}

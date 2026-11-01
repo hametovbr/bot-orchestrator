@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import re
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from zoneinfo import ZoneInfo
@@ -48,6 +49,15 @@ def human_duration(ms: int | None) -> str:
     return f"{hours} h {minutes} min"
 
 
+_NO_MODULE = re.compile(r"No module named '([^']+)'")
+
+
+def missing_module(error: str | None) -> str:
+    """The module name from a ModuleNotFoundError in a traceback, or ''."""
+    found = _NO_MODULE.search(error or "")
+    return found.group(1) if found else ""
+
+
 class Ui:
     """Templates, flash messages and lookups used by every view module."""
 
@@ -63,6 +73,7 @@ class Ui:
         env.filters["pretty"] = lambda v: json.dumps(v, ensure_ascii=False, indent=2)
         env.filters["route"] = describe_route
         env.filters["route_pattern"] = pattern_text
+        env.filters["missing_module"] = missing_module
         env.globals["version"] = __version__
 
     def _time(self, value: float | None, seconds: bool = True) -> str:

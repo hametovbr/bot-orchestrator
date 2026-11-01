@@ -10,10 +10,11 @@ services:
   # whichever container happens to create them first.
   volume-init:
     image: busybox:1.36
-    command: chown 101:101 /files /data
+    command: chown 101:101 /files /data /packages
     volumes:
       - bot-files:/files
       - orchestrator-data:/data
+      - runner-packages:/packages
 
   telegram-bot-api:
     image: aiogram/telegram-bot-api:latest
@@ -47,6 +48,8 @@ services:
       - bot-api-data:/var/lib/telegram-bot-api
       # Read-only files handlers may use, e.g. cookies for ctx.download.
       - ./shared:/shared:ro
+      # Extra Python packages from the Packages page.
+      - runner-packages:/packages
     mem_limit: 4g
     cpus: 2
 
@@ -83,3 +86,4 @@ volumes:
   bot-api-data:
   bot-files:
   orchestrator-data:
+  runner-packages:

@@ -1,5 +1,5 @@
 {% extends "bot_base.html" %}
-{% from "_macros.html" import status_badge, api_calls %}
+{% from "_macros.html" import status_badge, api_calls, missing_module_hint %}
 {% block tab %}
 <p><a class="muted small" href="/bots/{{ bot.id }}/tasks">← Tasks</a></p>
 <h2>#{{ t.id }} {{ t.title }} {{ status_badge(t.status) }}</h2>
@@ -24,6 +24,7 @@
 {% if t.error and t.status != "cancelled" %}
 <h2>Error</h2>
 <pre class="code error">{{ t.error }}</pre>
+{{ missing_module_hint(t.error) }}
 {% endif %}
 
 <h2>Log</h2>

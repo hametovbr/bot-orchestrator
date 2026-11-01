@@ -56,6 +56,9 @@ async def test_migrates_mvp_database(tmp_path):
     await db.connect()
     try:
         assert await db._one("PRAGMA user_version") == {"user_version": SCHEMA_VERSION}
+        assert await db.list_modules() == []
+        columns = {r["name"] for r in await db._all("PRAGMA table_info(tasks)")}
+        assert "modules" in columns
 
         active = await db.get_handler_by_name(1, "main")
         assert active["active_version"] == 1, "the MVP active version stays active"

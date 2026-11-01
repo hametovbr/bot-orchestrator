@@ -14,6 +14,8 @@ This document describes the current design. It changes as the project develops.
 - **The orchestrator owns the state; the runner is stateless.** Routes, handler
   versions, tasks, schedules and logs live in the orchestrator's database. The
   runner can be restarted at any time.
+- **Extra libraries and shared code are global.** One package list and one set of
+  shared modules serve every bot.
 - **Same file paths everywhere.** The local Bot API data directory is mounted
   at the same path in every container, so a path returned by `getFile` can be
   opened directly by handler code.
@@ -53,6 +55,11 @@ This document describes the current design. It changes as the project develops.
   skipped.
 - Notifications: failures are sent to one chat through one of the managed bots,
   at most once per 10 minutes for the same problem.
+- Shared modules: code every handler can import as `shared.<name>`, with
+  versions. The active versions travel with every runner call.
+- Packages: the requirements list is stored here; on start and every 10 minutes the
+  orchestrator checks that the runner has it installed and asks it to install the
+  list if not (for example after its volume was recreated).
 - Maintenance, hourly: prunes the update log and finished tasks older than
   `UPDATE_RETENTION_DAYS`, and deletes files the Bot API server downloaded more
   than `CACHE_RETENTION_HOURS` ago. Every 10 minutes it checks disk space.
@@ -70,6 +77,13 @@ This document describes the current design. It changes as the project develops.
   `ffmpeg`.
 - No Docker socket, CPU/RAM limits on the container, file helpers scoped to the
   bot folder; a shared read-only folder (`SHARED_READ_DIR`, e.g. cookies files).
+- Extra packages: installed with `uv pip install --target` into
+  `PACKAGES_DIR/envs/<hash>`, constrained to the runner's own dependency versions.
+  `PACKAGES_DIR/current` is switched to the new folder only after a successful
+  install; workers add it to `sys.path` after the runner's libraries.
+- Shared modules: an import hook makes `shared.<name>` load the code sent with the
+  job, on first import. Module and handler sources are registered with `linecache`,
+  so tracebacks show the failing lines.
 
 ### telegram-bot-api
 
@@ -145,6 +159,26 @@ default best video up to 1080p plus audio), `max_size_mb` (default 2000),
 `messages` (status texts, e.g. in another language), `options` (extra yt-dlp
 options).
 
+## Shared modules
+
+A module is Python code with a name and versions, common to all bots. Handlers and
+other modules import it with `from shared import name` or `import shared.name`.
+
+- Saving a module activates the new version for every handler at once. The module
+  page lists who imports it (found by parsing the `import` statements of the active
+  handler and module code) and can run any handler with the unsaved module code.
+- A module that is still imported cannot be deleted. Modules cannot be renamed,
+  because that would break imports.
+- Background tasks pin the module versions active when they are queued, as they pin
+  the handler code; "Run again" uses the same versions.
+
+## Packages
+
+The Packages page holds a `requirements.txt`-style list (package specifications
+only; options such as `-e` or `--index-url` are rejected). Both sides compute the
+same hash of the normalized list (comments and blank lines removed, first 16 hex
+digits of SHA-256) to tell whether the runner has what the orchestrator wants.
+
 ## Orchestrator–runner contract
 
 ### `POST {RUNNER_URL}/run`
@@ -164,6 +198,7 @@ Header `X-Runner-Secret: <RUNNER_SECRET>`.
   "kwargs": {},
   "task": {"id": 12, "title": "https://..."},
   "origin": {"update_row": 345},
+  "modules": {"downloads": {"version": 4, "code": "def fetch(...): ..."}},
   "update": {"update_id": 1, "message": {}},
   "secrets": {"NAME": "value"},
   "dry_run": false,
@@ -174,7 +209,7 @@ Header `X-Runner-Secret: <RUNNER_SECRET>`.
 `kind: "handler"` calls `handle(update, ctx)`; `kind: "task"` calls
 `entry(ctx, *args, **kwargs)` with `ctx.task` set. `origin` is passed back
 unchanged when the run starts a task. `handler.version` is 0 for unsaved code
-from a test run.
+from a test run; a module `version` of 0 is a draft from the module page.
 
 Response:
 
@@ -197,6 +232,26 @@ the pseudo-method `background` with the new `task_id`.
 Kills the process of a running job; its `/run` call then returns `cancelled`.
 Answers `{"cancelled": false}` if no such job is running.
 
+### `GET {RUNNER_URL}/packages`
+
+```json
+{
+  "hash": "217427db06ee0d6c",
+  "requirements": "pillow\nopenpyxl",
+  "installed": [{"name": "pillow", "version": "11.0.0"}],
+  "installing": false,
+  "target_hash": "217427db06ee0d6c",
+  "error": null,
+  "log": ["..."],
+  "finished_at": 1762020000.0
+}
+```
+
+### `POST {RUNNER_URL}/packages` with `{"requirements": "..."}`
+
+Starts an install in the background and answers 202 with the status above; 400 for
+options in the list, 409 while another install runs.
+
 ### Internal API of the orchestrator
 
 Used by the SDK; requires the same `X-Runner-Secret` header.
@@ -213,9 +268,10 @@ Used by the SDK; requires the same `X-Runner-Secret` header.
 
 ## Data model
 
-Schema version 2 (`PRAGMA user_version`). Databases created by 0.1.0 are
-migrated on start: the MVP handler becomes a handler called `main` behind a
-catch-all route, enabled if the MVP handler was active.
+Schema version 3 (`PRAGMA user_version`). Older databases are migrated on start,
+step by step: from 0.1.0 the MVP handler becomes a handler called `main` behind a
+catch-all route, enabled if the MVP handler was active; from 0.2.0 the module
+tables are added.
 
 | Table | Contents |
 | --- | --- |
@@ -224,12 +280,13 @@ catch-all route, enabled if the MVP handler was active.
 | `handler_versions` | Code and comment of every saved version |
 | `routes` | Position, condition, pattern, description, handler, enabled |
 | `updates` | Raw update, sender, summary, route, handler and version, status, duration, error, logs, API calls |
-| `tasks` | Code snapshot, entry, arguments, origin update, status, progress, run id, timings, error, logs, API calls |
+| `tasks` | Code snapshot, pinned module versions, entry, arguments, origin update, status, progress, run id, timings, error, logs, API calls |
+| `modules`, `module_versions` | Shared modules: name, active version; code and comment of every version |
 | `schedules` | Name, cron, handler, chat, enabled, next and last run |
 | `console_history` | Last 200 API console calls per bot |
 | `secrets` | Encrypted secret values |
 | `kv` | JSON values stored by handlers |
-| `app_settings` | Notification settings |
+| `app_settings` | Notification settings, the package list |
 
 Update statuses: `pending`, `ok`, `error`, `timeout`, `dispatch_error` (the runner
 could not be reached), `no_route`, `ignored` (sender not in allowed users).
@@ -246,7 +303,9 @@ Task statuses: `queued`, `running`, `ok`, `error`, `timeout`, `cancelled`,
    tasks with cancel and retry, `ctx.download` (yt-dlp) and `ctx.reply_file`,
    Bot API file cache cleanup, schedules, notifications in Telegram, editor
    suggestions and handler templates.
-3. **Stage 3:** shared modules between handlers, Git sync for handlers, AI
-   assistant in the editor, metrics, webhook mode.
+3. **Stage 3 (0.3, in progress):** extra Python packages for handlers and shared
+   modules (done); next: export to Git and consistent SQLite backups, sign-in
+   through the reverse proxy, simple charts.
 4. **Later, maybe:** user-bots (a Telegram user account driven by code) for
-   conversations with third-party bots.
+   conversations with third-party bots; an AI assistant in the editor.
+   Webhook mode is not planned: long polling against the local server is enough.

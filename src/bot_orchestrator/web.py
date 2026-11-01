@@ -11,7 +11,7 @@ from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.sessions import SessionMiddleware
 
-from . import __version__, internal_api, maintenance, views_bot, views_logic
+from . import __version__, internal_api, maintenance, views_bot, views_logic, views_shared
 from .config import Settings, get_settings
 from .db import Database
 from .notify import EVENTS, Notifier
@@ -203,6 +203,7 @@ def create_app(
 
     views_bot.register(app, ui)
     views_logic.register(app, ui)
+    views_shared.register(app, ui)
     internal_api.register(app, ui)
     return app
 

@@ -12,6 +12,7 @@ from fastapi.testclient import TestClient
 
 from bot_orchestrator.config import Settings
 from bot_orchestrator.db import Database
+from bot_orchestrator.packages import requirements_hash
 from bot_orchestrator.service import Orchestrator
 from bot_orchestrator.web import create_app
 
@@ -52,11 +53,35 @@ class Fake:
         # Background tasks wait for this event before answering, so tests can cancel them.
         self.task_gate: asyncio.Event | None = None
         self.cancelled: list[str] = []
+        # Package state of the fake runner.
+        self.packages = {
+            "hash": requirements_hash(""),
+            "requirements": "",
+            "installed": [],
+            "installing": False,
+            "target_hash": None,
+            "error": None,
+            "log": [],
+            "finished_at": None,
+        }
+        self.package_installs: list[str] = []
 
     async def __call__(self, request: httpx.Request) -> httpx.Response:
         body = json.loads(request.content or b"{}")
         if request.url.host == "runner":
             assert request.headers["x-runner-secret"] == RUNNER_SECRET
+            if request.url.path == "/packages":
+                if request.method == "POST":
+                    wanted = body["requirements"]
+                    self.package_installs.append(wanted)
+                    self.packages.update(
+                        hash=requirements_hash(wanted),
+                        requirements=wanted,
+                        installed=[{"name": n, "version": "1.0"} for n in wanted.split()],
+                        log=["Installed."],
+                    )
+                    return httpx.Response(202, json=self.packages)
+                return httpx.Response(200, json=self.packages)
             if request.url.path.startswith("/cancel/"):
                 self.cancelled.append(request.url.path.removeprefix("/cancel/"))
                 if self.task_gate:

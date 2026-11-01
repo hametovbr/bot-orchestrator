@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+{% block title %}Packages · Bot Orchestrator{% endblock %}
+{% block content %}
+<h1>Packages</h1>
+<p class="muted small">Extra Python libraries for all handlers and modules, in <code>requirements.txt</code> format.
+  bot-runner installs them with uv into a separate folder and switches to it only when the install succeeds,
+  so a failed install never breaks running bots. The runner's own libraries (httpx, yt-dlp, …) keep their versions.</p>
+
+{% set r = p.runner %}
+<section class="card">
+  <div class="toolbar">
+    <h2 class="inline">Status</h2>
+    {% if p.error %}<span class="badge badge-error">runner unreachable</span>
+    {% elif r.installing %}<span class="badge badge-running">installing</span> <span id="auto-refresh" data-seconds="2" class="muted small">refreshing</span>
+    {% elif r.error and r.target_hash == p.wanted_hash %}<span class="badge badge-error">install failed</span>
+    {% elif p.in_sync %}<span class="badge badge-ok">installed</span>
+    {% else %}<span class="badge badge-pending">not installed yet</span>{% endif %}
+  </div>
+  {% if p.error %}
+  <p class="text-error">{{ p.error }}</p>
+  {% else %}
+    {% if r.installed %}
+    <table class="table compact">
+      <thead><tr><th>Installed package</th><th>Version</th></tr></thead>
+      <tbody>{% for item in r.installed %}<tr><td><code>{{ item.name }}</code></td><td>{{ item.version }}</td></tr>{% endfor %}</tbody>
+    </table>
+    <p class="muted small">Dependencies of the listed packages are installed too.</p>
+    {% else %}
+    <p class="muted">No extra packages installed.</p>
+    {% endif %}
+    {% if r.log %}
+    <details class="space-top" {% if r.installing or r.error %}open{% endif %}>
+      <summary>Install log{% if r.finished_at %} · {{ r.finished_at | time }}{% endif %}</summary>
+      <pre class="code {% if r.error %}error{% endif %}">{{ r.log | join("\n") }}</pre>
+    </details>
+    {% endif %}
+  {% endif %}
+</section>
+
+<section class="card">
+  <h2>Requirements</h2>
+  <form method="post" action="/packages" class="stack">
+    <textarea name="requirements" class="mono" rows="10" spellcheck="false" placeholder="pillow&#10;openpyxl>=3.1&#10;python-dateutil">{{ p.wanted }}</textarea>
+    <p class="muted small">One package per line, with an optional version (<code>pillow>=10</code>). Comments start with <code>#</code>.
+      Options such as <code>-e</code> or <code>--index-url</code> are not supported. Packages that need compiling may fail:
+      choose ones with ready-made wheels. Heavy libraries may need a higher <code>HANDLER_MEMORY_MB</code>.</p>
+    <div><button class="primary" {% if r and r.installing %}disabled{% endif %}>Save and install</button></div>
+  </form>
+</section>
+{% endblock %}

@@ -11,6 +11,7 @@ from .handler_templates import TEMPLATES
 from .service import BotError, Orchestrator
 from .telegram import TelegramError
 from .ui import Ui
+from .views_shared import unknown_imports
 
 HANDLER_NAME = re.compile(r"^[A-Za-z0-9_-]{1,40}$")
 TASK_STATUSES = ["queued", "running", "ok", "error", "timeout", "cancelled", "interrupted"]
@@ -123,6 +124,14 @@ def register(app: FastAPI, ui: Ui) -> None:
             return ui.back(url)
         version = await o.db.save_version(handler_id, code, comment.strip()[:200])
         ui.flash(request, f"Saved and activated version {version}.", "success")
+        missing = await unknown_imports(o, code)
+        if missing:
+            ui.flash(
+                request,
+                "No such shared modules yet: " + ", ".join(missing) + ". Create them on the "
+                "Modules page.",
+                "warning",
+            )
         return ui.back(url)
 
     @app.post("/bots/{bot_id}/handlers/{handler_id}/activate")
