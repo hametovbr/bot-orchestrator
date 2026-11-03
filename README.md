@@ -3,7 +3,7 @@
 A self-hosted control panel for running many Telegram bots on top of a single
 [local Telegram Bot API server](https://github.com/tdlib/telegram-bot-api).
 
-> **Status:** 0.3. Works end to end; expect breaking changes before 1.0.
+> **Status:** 0.4. Works end to end; expect breaking changes before 1.0.
 
 ## Features
 
@@ -39,6 +39,8 @@ A self-hosted control panel for running many Telegram bots on top of a single
   cache is cleaned automatically.
 - **Settings per bot.** Allowed users, encrypted secrets, stored key-value data,
   pause/resume, moving the bot back to the cloud API.
+- **Environment for handlers.** Variables set on the runner as `BOTENV_<NAME>`
+  appear in every handler as `os.environ["<NAME>"]`, without editing code.
 
 Handlers run in [bot-runner](https://github.com/hametovbr/bot-runner), each in its
 own process with a time and memory limit, so a broken handler cannot affect the
@@ -122,6 +124,32 @@ Open `http://<host>:8000` (by default the port is bound to `127.0.0.1`; set
 
 To update: `docker compose pull && docker compose up -d`, or let
 [Watchtower](https://containrrr.dev/watchtower/) do it.
+
+### Environment variables for handlers
+
+Global settings that handlers need, such as a service URL or a default language,
+can come from the compose file instead of the code. Add them to the `bot-runner`
+service with the `BOTENV_` prefix:
+
+```yaml
+  bot-runner:
+    environment:
+      BOTENV_WEATHER_API_URL: https://api.example.com
+```
+
+and read them in a handler without the prefix: `os.environ["WEATHER_API_URL"]`.
+They reach handlers, background tasks and programs started with `ctx.shell`, are
+the same for every bot and are read when the runner starts (`docker compose up -d`
+after a change). `PATH`, `PYTHON*`, `LD_*` and the runner's own settings cannot be
+set this way. Passwords and API keys belong in the per-bot secrets (`ctx.secrets`).
+Details: [bot-runner README](https://github.com/hametovbr/bot-runner#environment-variables-for-handlers).
+
+### Versions
+
+Releases are tagged `vX.Y.Z` in both repositories; each release publishes images
+`ghcr.io/hametovbr/bot-orchestrator:X.Y.Z` and `ghcr.io/hametovbr/bot-runner:X.Y.Z`
+(also `X.Y`). `latest` follows `main`. Pin both images to the same version to
+avoid surprises; changes are listed in [CHANGELOG.md](CHANGELOG.md).
 
 ## How it fits together
 

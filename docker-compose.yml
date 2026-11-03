@@ -43,6 +43,10 @@ services:
       MAX_CONCURRENT_RUNS: ${MAX_CONCURRENT_RUNS:-8}
       MAX_CONCURRENT_TASKS: ${MAX_CONCURRENT_TASKS:-2}
       TZ: ${TZ:-UTC}
+      # Environment variables for handlers: BOTENV_<NAME> becomes <NAME> in every
+      # handler, background task and ctx.shell program (os.environ["<NAME>"]).
+      # Same for all bots; use per-bot secrets (ctx.secrets) for passwords and keys.
+      # BOTENV_WEATHER_API_URL: https://api.example.com
     volumes:
       - bot-files:/files
       - bot-api-data:/var/lib/telegram-bot-api

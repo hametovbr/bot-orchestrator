@@ -81,6 +81,12 @@ This document describes the current design. It changes as the project develops.
   `PACKAGES_DIR/envs/<hash>`, constrained to the runner's own dependency versions.
   `PACKAGES_DIR/current` is switched to the new folder only after a successful
   install; workers add it to `sys.path` after the runner's libraries.
+- Handler environment: on start the runner collects its own variables named
+  `BOTENV_<NAME>` and passes them to every handler, task and `ctx.shell` program as
+  `<NAME>`, without the prefixed originals. A `BOTENV_` variable replaces one of the
+  same name; empty or invalid names, `PATH`, `PYTHON*`, `LD_*` and the runner's own
+  settings (`RUNNER_SECRET`, `HANDLER_TIMEOUT`, ...) are skipped with a warning. The
+  container log lists the names passed. The values are global, not per bot.
 - Shared modules: an import hook makes `shared.<name>` load the code sent with the
   job, on first import. Module and handler sources are registered with `linecache`,
   so tracebacks show the failing lines.
@@ -151,6 +157,7 @@ async def fetch(ctx, url):
 | `ctx.files.write_text/write_bytes/read_text/read_bytes/list/exists/path/readable/safe_name` | File helpers scoped to the bot folder |
 | `await ctx.kv.get(key, default)`, `set`, `delete` | Per-bot JSON storage kept by the orchestrator |
 | `ctx.secrets[name]` | Secrets from the Settings tab |
+| `os.environ[name]` | Not `ctx`: global `BOTENV_<name>` variables of the runner container |
 | `ctx.log(...)`, `print(...)` | Lines in the log |
 | `ctx.http` | `httpx.AsyncClient` |
 | `await ctx.shell(*args, timeout=, cwd=)` | Run a program (default cwd: the bot folder) |
@@ -306,8 +313,9 @@ Task statuses: `queued`, `running`, `ok`, `error`, `timeout`, `cancelled`,
    tasks with cancel and retry, `ctx.download` (yt-dlp) and `ctx.reply_file`,
    Bot API file cache cleanup, schedules, notifications in Telegram, editor
    suggestions and handler templates.
-3. **Stage 3 (0.3, in progress):** extra Python packages for handlers and shared
-   modules (done); next: export to Git and consistent SQLite backups, sign-in
+3. **Stage 3 (0.3–0.4, in progress):** extra Python packages for handlers and
+   shared modules (0.3), environment variables for handlers from `BOTENV_*` of the
+   runner and versioned releases (0.4); next: export to Git and consistent SQLite backups, sign-in
    through the reverse proxy, simple charts.
 4. **Later, maybe:** user-bots (a Telegram user account driven by code) for
    conversations with third-party bots; an AI assistant in the editor.

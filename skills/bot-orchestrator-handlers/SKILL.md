@@ -10,7 +10,7 @@ local Telegram Bot API server. Bot logic is Python code written in its web UI an
 executed by bot-runner. This skill describes that code: what it may use, how it
 runs and how to hand it over.
 
-Matches **bot-orchestrator 0.3.0** and **bot-runner 0.3.0**.
+Matches **bot-orchestrator 0.4.0** and **bot-runner 0.4.0**.
 
 ## Execution model (read first)
 
@@ -60,6 +60,8 @@ Matches **bot-orchestrator 0.3.0** and **bot-runner 0.3.0**.
   `https?://\S+`, `callback` · `cancel:`, plus where it goes in the order if
   other routes could match first.
 - **Secrets** to add on the bot's Settings tab (name and meaning, never values).
+- **Environment variables** the code reads with `os.environ`, if any: the owner
+  sets them on the runner as `BOTENV_<NAME>` (global, not per bot).
 - **Packages** to add on the Packages page and **shared modules** to create.
 - **Schedule** (cron, chat) if the handler runs on a timer.
 - **How to test**: a sample update JSON for the editor's test run (dry run is on
@@ -69,6 +71,9 @@ Matches **bot-orchestrator 0.3.0** and **bot-runner 0.3.0**.
 
 - `await` every `ctx` coroutine; a missing `await` silently does nothing.
 - Never keep tokens, passwords or API keys in code: use `ctx.secrets["NAME"]`.
+  Global, non-secret settings may come from `os.environ` (set on the runner as
+  `BOTENV_<NAME>`, see [platform.md](references/platform.md#environment-variables));
+  read them with `os.environ.get` and a default, since a deployment may not set them.
 - Do not import or call `bot_runner` internals, the database or other services;
   the SDK is the contract. The one exception is the exception class
   `from bot_runner.media import DownloadFailed`.

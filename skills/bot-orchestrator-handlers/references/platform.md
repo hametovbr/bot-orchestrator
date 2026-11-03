@@ -133,6 +133,32 @@ Paths, identical in every container:
 | `/var/lib/telegram-bot-api` | Files downloaded by the local Bot API server (`getFile`), cleaned regularly |
 | `/shared` | Read-only files for handlers, e.g. cookies (`/shared/instagram/...`); not visible to the Bot API server |
 
+### Environment variables
+
+The owner can pass settings to all handlers through the runner container: a
+variable `BOTENV_<NAME>=value` on the `bot-runner` service appears as
+`<NAME>=value` in the environment of every handler, background task and
+`ctx.shell` program.
+
+```python
+import os
+
+
+async def handle(update, ctx):
+    api_url = os.environ.get("WEATHER_API_URL", "https://api.example.com")
+    ...
+```
+
+- The prefix is removed and the `BOTENV_*` originals are not visible.
+- A `BOTENV_` variable replaces a variable of the same name (`BOTENV_TZ` sets `TZ`).
+- Not allowed (skipped with a warning in the runner log): empty or invalid names,
+  `PATH`, names starting with `PYTHON` or `LD_`, and runner settings such as
+  `RUNNER_SECRET` or `HANDLER_TIMEOUT`.
+- Values are the same for every bot and are read when the runner starts; changing
+  them means restarting the container. They are not shown in the UI.
+- Use them for global, non-secret settings. Per-bot values and anything secret go
+  to `ctx.secrets`. List every variable the code reads when handing it over.
+
 Per run: at most 500 log lines and 200 recorded Bot API calls are kept. Bot
 tokens are masked everywhere in logs and errors.
 

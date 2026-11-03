@@ -33,7 +33,7 @@ Updates and Bot API results are wrapped read-only objects:
 | `ctx.handler` | The running handler: `id`, `name`, `version` (0 for unsaved code in a test run) |
 | `ctx.task` | Inside a background task: `ctx.task.id`, `ctx.task.title`; `None` in a handler |
 | `ctx.dry_run` | `True` in a dry test run |
-| `ctx.secrets` | `dict` of the bot's secrets (Settings tab). `ctx.secrets["NAME"]` raises `KeyError` if missing; use `.get` for optional ones |
+| `ctx.secrets` | `dict` of the bot's secrets (Settings tab). `ctx.secrets["NAME"]` raises `KeyError` if missing; use `.get` for optional ones. Global non-secret settings come from `os.environ` instead, see [platform.md](platform.md#environment-variables) |
 | `ctx.http` | Shared `httpx.AsyncClient` (connect timeout 60 s, read timeout 300 s) for outside requests |
 | `ctx.api` | Bot API client, below |
 | `ctx.files` | File helpers, below |
