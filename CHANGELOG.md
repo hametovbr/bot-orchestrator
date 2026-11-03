@@ -17,6 +17,11 @@ meant to run with release `X.Y.Z` of
   publishes the image as `X.Y.Z` and `X.Y` and creates a GitHub release from this
   file.
 
+- Allowed users accept `@usernames` as well as numeric user ids, mixed in one
+  list (`@alice, 123456789`; `t.me/alice` works too). Usernames match
+  case-insensitively; invalid entries are reported instead of being dropped. The
+  Settings tab lists the bot's recent senders with their ids.
+
 ### Changed
 
 - The `latest` image tag is published from `main` only.

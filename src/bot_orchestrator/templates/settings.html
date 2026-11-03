@@ -16,12 +16,20 @@
 
 <section class="card">
   <h2>Allowed users</h2>
-  <p class="muted small">Numeric Telegram user ids, separated by commas. Updates from anyone else are logged as
-    <em>ignored</em> and never reach the handler. Leave empty to allow everyone.</p>
+  <p class="muted small">Who may use the bot: <code>@usernames</code> or numeric Telegram user ids, separated by
+    commas. Updates from anyone else are logged as <em>ignored</em> and never reach a handler. Leave empty to allow
+    everyone.</p>
+  <p class="muted small">A username stops matching if the user changes or removes it, and users without a username can
+    only be allowed by id. The id of a sender is shown in the update log.</p>
   <form method="post" action="/bots/{{ bot.id }}/allowed-users" class="row">
-    <input type="text" name="allowed" value="{{ bot.allowed_users }}" placeholder="123456789, 987654321" class="grow">
+    <input type="text" name="allowed" value="{{ bot.allowed_users | replace(',', ', ') }}"
+      placeholder="@alice, @bob, 123456789" class="grow" spellcheck="false" autocapitalize="off">
     <button>Save</button>
   </form>
+  {% if senders %}
+  <p class="muted small">Recent senders:
+    {% for s in senders %}{{ s.from_name or "?" }} <code>{{ s.from_id }}</code>{% if not loop.last %}; {% endif %}{% endfor %}</p>
+  {% endif %}
 </section>
 
 <section class="card">

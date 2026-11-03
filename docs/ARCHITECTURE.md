@@ -285,7 +285,7 @@ tables are added.
 
 | Table | Contents |
 | --- | --- |
-| `bots` | Encrypted token, username, status, update offset, allowed users |
+| `bots` | Encrypted token, username, status, update offset, allowed users (`allowed_users`: `123,@name`, ids and lowercase usernames) |
 | `handlers` | Name and active version per bot |
 | `handler_versions` | Code and comment of every saved version |
 | `routes` | Position, condition, pattern, description, handler, enabled |
@@ -299,7 +299,8 @@ tables are added.
 | `app_settings` | Notification settings, the package list |
 
 Update statuses: `pending`, `ok`, `error`, `timeout`, `dispatch_error` (the runner
-could not be reached), `no_route`, `ignored` (sender not in allowed users).
+could not be reached), `no_route`, `ignored` (the sender matches neither an id nor a username of the
+allowed users).
 
 Task statuses: `queued`, `running`, `ok`, `error`, `timeout`, `cancelled`,
 `interrupted` (the orchestrator restarted while it ran), `dispatch_error`.
@@ -315,7 +316,7 @@ Task statuses: `queued`, `running`, `ok`, `error`, `timeout`, `cancelled`,
    suggestions and handler templates.
 3. **Stage 3 (0.3–0.4, in progress):** extra Python packages for handlers and
    shared modules (0.3), environment variables for handlers from `BOTENV_*` of the
-   runner and versioned releases (0.4); next: export to Git and consistent SQLite backups, sign-in
+   runner, allowed users by `@username`, versioned releases (0.4); next: export to Git and consistent SQLite backups, sign-in
    through the reverse proxy, simple charts.
 4. **Later, maybe:** user-bots (a Telegram user account driven by code) for
    conversations with third-party bots; an AI assistant in the editor.

@@ -22,7 +22,7 @@ from .packages import Packages
 from .routing import find_route
 from .security import Cipher, mask, mask_value
 from .telegram import BotApi, TelegramError
-from .updates import describe, parse_allowed
+from .updates import describe, parse_allowed, sender
 
 log = logging.getLogger("bot_orchestrator")
 
@@ -258,8 +258,7 @@ class Orchestrator:
 
     async def _receive(self, bot: dict[str, Any], update: dict[str, Any]) -> None:
         info = describe(update)
-        allowed = parse_allowed(bot["allowed_users"])
-        if allowed and info["from_id"] not in allowed:
+        if not parse_allowed(bot["allowed_users"]).permits(sender(update)):
             await self.db.add_update(bot["id"], update, status="ignored", **info)
             return
         route = await self.match_route(bot, update)

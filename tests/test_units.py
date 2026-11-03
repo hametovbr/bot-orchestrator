@@ -1,7 +1,7 @@
 import pytest
 
 from bot_orchestrator.security import Cipher, mask, short_token
-from bot_orchestrator.updates import describe, parse_allowed
+from bot_orchestrator.updates import describe, normalize_allowed, parse_allowed, sender
 
 from .conftest import TOKEN
 
@@ -52,8 +52,34 @@ def test_describe_document_and_callback():
 
 
 def test_parse_allowed():
-    assert parse_allowed("1, 2;3 x") == {1, 2, 3}
-    assert parse_allowed("") == set()
+    allowed = parse_allowed("1, 2;3 x @Alice")
+    assert allowed.ids == {1, 2, 3}
+    assert allowed.usernames == {"alice"}
+    assert not parse_allowed("")
+
+
+def test_normalize_allowed():
+    entries, invalid = normalize_allowed(" @Bob, 42;alice_1  t.me/Carol https://t.me/dave_x 7 42")
+    assert entries == ["7", "42", "@alice_1", "@bob", "@carol", "@dave_x"]
+    assert invalid == []
+    assert normalize_allowed("@ab, 1x, @_name, @good_one")[1] == ["@ab", "1x", "@_name"]
+    assert normalize_allowed("") == ([], [])
+
+
+def test_allowed_permits():
+    allowed = parse_allowed("42,@alice")
+    assert allowed.permits({"id": 42})
+    assert allowed.permits({"id": 1, "username": "ALICE"})
+    assert not allowed.permits({"id": 1, "username": "bob"})
+    assert not allowed.permits({"id": 1})
+    assert not allowed.permits(None)
+    assert parse_allowed("").permits(None)
+
+
+def test_sender():
+    update = {"update_id": 1, "callback_query": {"id": "x", "from": {"id": 5, "username": "u"}}}
+    assert sender(update) == {"id": 5, "username": "u"}
+    assert sender({"update_id": 2, "schedule": {"id": 1}}) is None
 
 
 async def test_notifications_work_right_after_boot():

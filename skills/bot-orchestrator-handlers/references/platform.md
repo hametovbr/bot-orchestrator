@@ -6,8 +6,11 @@ Source of truth: `bot-orchestrator/src/bot_orchestrator/routing.py`, `updates.py
 ## How an update reaches code
 
 1. One long-polling loop per bot gets the update from the local Bot API server.
-2. If the bot has **allowed users** (Settings tab) and the sender is not one of
-   them, the update is logged as `ignored` and nothing runs.
+2. If the bot has **allowed users** (Settings tab: `@usernames` and/or numeric user
+   ids) and the sender matches none of them, the update is logged as `ignored` and
+   nothing runs. Usernames match case-insensitively; updates without a sender
+   (for example channel posts from a chat without a username) are ignored when
+   the list is set. Handlers never need to check the sender for this.
 3. The bot's **routes** are checked from top to bottom; the first enabled match
    runs the **active version** of its handler. No match: status `no_route`.
 4. The handler runs in bot-runner; the update log stores the status, duration,

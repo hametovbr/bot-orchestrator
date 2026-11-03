@@ -571,14 +571,19 @@ class Database:
         row = await self._one("SELECT * FROM updates WHERE bot_id = ? AND id = ?", bot_id, row_id)
         return _decode(row, "raw", "logs", "api_calls")
 
-    async def recent_senders(self, limit: int = 10) -> list[dict[str, Any]]:
-        """People who wrote to any bot recently, for picking a notification chat."""
+    async def recent_senders(
+        self, limit: int = 10, bot_id: int | None = None
+    ) -> list[dict[str, Any]]:
+        """People who wrote to any bot (or to one bot) recently."""
         return await self._all(
             """
             SELECT from_id, MAX(from_name) AS from_name, MAX(received_at) AS last_seen
               FROM updates WHERE from_id IS NOT NULL AND kind != 'schedule'
+               AND (? IS NULL OR bot_id = ?)
              GROUP BY from_id ORDER BY last_seen DESC LIMIT ?
             """,
+            bot_id,
+            bot_id,
             limit,
         )
 

@@ -37,8 +37,9 @@ A self-hosted control panel for running many Telegram bots on top of a single
 - **Bot API console.** Call any method from the browser, with history.
 - **Files.** Browse, download and delete what handlers saved; the Bot API file
   cache is cleaned automatically.
-- **Settings per bot.** Allowed users, encrypted secrets, stored key-value data,
-  pause/resume, moving the bot back to the cloud API.
+- **Settings per bot.** Who may use the bot (an allow list of `@usernames` or user
+  ids), encrypted secrets, stored key-value data, pause/resume, moving the bot back
+  to the cloud API.
 - **Environment for handlers.** Variables set on the runner as `BOTENV_<NAME>`
   appear in every handler as `os.environ["<NAME>"]`, without editing code.
 

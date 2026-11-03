@@ -10,6 +10,7 @@ from fastapi.responses import FileResponse
 
 from .service import BotError, Orchestrator
 from .ui import Ui
+from .updates import normalize_allowed
 
 SECRET_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,63}$")
 UPDATE_STATUSES = [
@@ -193,6 +194,7 @@ def register(app: FastAPI, ui: Ui) -> None:
             tab="settings",
             secrets=await o.db.list_secret_names(bot_id),
             kv=await o.db.kv_list(bot_id),
+            senders=await o.db.recent_senders(limit=8, bot_id=bot_id),
         )
 
     @app.post("/bots/{bot_id}/pause")
@@ -212,15 +214,21 @@ def register(app: FastAPI, ui: Ui) -> None:
         request: Request, o: Orch, bot_id: int, allowed: Annotated[str, Form()] = ""
     ):
         await ui.bot(bot_id)
-        ids = sorted({p for p in re.split(r"[\s,;]+", allowed) if p})
-        if any(not p.isdigit() for p in ids):
-            ui.flash(request, "Allowed users must be numeric Telegram user ids.", "error")
+        entries, invalid = normalize_allowed(allowed)
+        if invalid:
+            ui.flash(
+                request,
+                "Not a Telegram user id or username: "
+                + ", ".join(invalid)
+                + ". Use numeric ids or @usernames.",
+                "error",
+            )
             return ui.back(f"/bots/{bot_id}/settings")
-        await o.db.set_allowed_users(bot_id, ",".join(ids))
+        await o.db.set_allowed_users(bot_id, ",".join(entries))
         ui.flash(
             request,
             "Allowed users saved."
-            if ids
+            if entries
             else "Allowed users cleared: the bot handles updates from everyone.",
             "success",
         )

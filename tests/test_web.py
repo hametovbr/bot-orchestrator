@@ -186,6 +186,22 @@ def test_allowed_users_filter(logged_in, fake):
     assert fake.runs == []
 
 
+def test_allowed_usernames(logged_in, fake):
+    add_bot(logged_in)
+    create_handler(logged_in, "main")
+    page = logged_in.post(f"/bots/{BOT_ID}/allowed-users", data={"allowed": "@Ann, 7, not a name!"})
+    assert "Not a Telegram user id or username" in page.text
+    logged_in.post(f"/bots/{BOT_ID}/allowed-users", data={"allowed": "@Ann, 7"})
+    bot = db_call(logged_in, logged_in.orchestrator.db.get_bot, BOT_ID)
+    assert bot["allowed_users"] == "7,@ann"
+    # make_update sends from user 42 with the username "ann".
+    fake.pending.append(make_update(300, user_id=42))
+    rows = wait_for(logged_in, lambda r: len(r) == 1)
+    assert rows[0]["status"] != "ignored"
+    page = logged_in.get(f"/bots/{BOT_ID}/settings")
+    assert "7, @ann" in page.text
+
+
 def test_offset_advances(logged_in, fake):
     add_bot(logged_in)
     fake.pending += [make_update(200), make_update(201)]
