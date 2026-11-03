@@ -202,6 +202,37 @@ def test_allowed_usernames(logged_in, fake):
     assert "7, @ann" in page.text
 
 
+def test_purge_command(logged_in, fake):
+    add_bot(logged_in)
+    create_handler(logged_in, "main")
+
+    def recent(update_id, text):
+        update = make_update(update_id, text=text)
+        update["message"]["date"] = int(time.time())
+        return update
+
+    fake.pending.append(recent(400, "/start"))
+    wait_for(logged_in, lambda r: len(r) == 1)
+    # Off by default: /purge goes to the routes.
+    fake.pending.append(recent(403, "/purge"))
+    rows = wait_for(logged_in, lambda r: len(r) == 2)
+    assert rows[0]["handler_name"] == "main"
+
+    logged_in.post(f"/bots/{BOT_ID}/purge-command", data={"enabled": "on"})
+    fake.pending.append(recent(406, "/purge@test_bot"))
+    rows = wait_for(logged_in, lambda r: len(r) == 3 and r[0]["status"] == "ok")
+    assert rows[0]["handler_name"] == "/purge (built-in)"
+    deleted = [i for m, b in fake.local_calls if m == "deleteMessages" for i in b["message_ids"]]
+    # Message ids equal update ids here; all messages are recent and /start (400) is kept.
+    assert deleted == list(range(1, 400)) + list(range(401, 407))
+    runs_before = len(fake.runs)
+
+    logged_in.post(f"/bots/{BOT_ID}/purge-command", data={})
+    bot = db_call(logged_in, logged_in.orchestrator.db.get_bot, BOT_ID)
+    assert bot["purge_command"] == 0
+    assert len(fake.runs) == runs_before
+
+
 def test_offset_advances(logged_in, fake):
     add_bot(logged_in)
     fake.pending += [make_update(200), make_update(201)]

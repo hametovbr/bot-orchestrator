@@ -3,7 +3,7 @@
 A self-hosted control panel for running many Telegram bots on top of a single
 [local Telegram Bot API server](https://github.com/tdlib/telegram-bot-api).
 
-> **Status:** 0.4. Works end to end; expect breaking changes before 1.0.
+> **Status:** 0.5. Works end to end; expect breaking changes before 1.0.
 
 ## Features
 
@@ -34,6 +34,9 @@ A self-hosted control panel for running many Telegram bots on top of a single
   Bot API calls, started tasks and the raw JSON.
 - **Notifications.** Handler, task and schedule failures, a stopped bot, an
   unreachable runner or a full disk are sent to you in Telegram.
+- **`/purge` command.** Optional per bot: users clear the last 48 hours of their
+  chat with the bot (both sides, `/start` stays, the bot is not blocked). Older
+  messages cannot be deleted by bots.
 - **Bot API console.** Call any method from the browser, with history.
 - **Files.** Browse, download and delete what handlers saved; the Bot API file
   cache is cleaned automatically.

@@ -5,6 +5,22 @@ version may contain breaking changes. Release `X.Y.Z` of bot-orchestrator is
 meant to run with release `X.Y.Z` of
 [bot-runner](https://github.com/hametovbr/bot-runner/blob/main/CHANGELOG.md).
 
+## [0.5.0] - 2026-11-04
+
+### Added
+
+- Built-in `/purge` command, turned on per bot on the Settings tab (off by
+  default). In a private chat it deletes the messages of the last 48 hours, the
+  user's and the bot's, including the command itself and keeping `/start`, without
+  blocking the bot. Telegram does not let bots delete older messages, so they stay.
+  The run appears in the update log as `/purge (built-in)`. Works with bot-runner
+  0.4.0.
+- The update log shows built-in handlers by name.
+
+### Changed
+
+- Database schema version 4 (adds `bots.purge_command`); migrated on start.
+
 ## [0.4.0] - 2026-11-03
 
 ### Added

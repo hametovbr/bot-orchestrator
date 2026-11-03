@@ -45,9 +45,18 @@ This document describes the current design. It changes as the project develops.
   (`deleteWebhook` + `logOut` on `api.telegram.org`), pause, delete, migrate back.
 - One `getUpdates` long-polling loop per running bot. Adding a bot starts a new
   loop without restarting any container.
-- Routing: drops updates from users outside the bot's allow list, then checks the
-  bot's routes in order; the first enabled match runs its handler's active
-  version, up to `BOT_CONCURRENCY` at a time per bot.
+- Routing: drops updates from users outside the bot's allow list, handles the
+  built-in `/purge` command if the bot has it on, then checks the bot's routes in
+  order; the first enabled match runs its handler's active version, up to
+  `BOT_CONCURRENCY` at a time per bot.
+- `/purge` (`purge.py`, per bot, off by default): in a private chat, deletes the
+  messages of the last 48 hours by id with `deleteMessages`, keeping `/start`.
+  The Bot API cannot read or clear a chat's history, but message ids in a private
+  chat are one sequence for both sides, and bots may delete both sides' messages
+  younger than 48 hours. The range runs from just after the newest message in the
+  update log older than 47 hours (at most 3000 ids) to the `/purge` message itself;
+  a refused batch is retried one message at a time. The run is logged as an update
+  with the handler name `/purge (built-in)`. Nothing runs in the runner.
 - Background tasks: a queue in the database, run `TASK_CONCURRENCY` at a time
   across all bots, cancellable from the UI or from handler code.
 - Schedules: a five-field cron per schedule in the `TZ` timezone, checked at the
@@ -278,14 +287,15 @@ Used by the SDK; requires the same `X-Runner-Secret` header.
 
 ## Data model
 
-Schema version 3 (`PRAGMA user_version`). Older databases are migrated on start,
+Schema version 4 (`PRAGMA user_version`). Older databases are migrated on start,
 step by step: from 0.1.0 the MVP handler becomes a handler called `main` behind a
 catch-all route, enabled if the MVP handler was active; from 0.2.0 the module
-tables are added.
+tables are added; from 0.3.0 and 0.4.0 (schema 3) `bots.purge_command` is added
+(off).
 
 | Table | Contents |
 | --- | --- |
-| `bots` | Encrypted token, username, status, update offset, allowed users (`allowed_users`: `123,@name`, ids and lowercase usernames) |
+| `bots` | Encrypted token, username, status, update offset, allowed users (`allowed_users`: `123,@name`, ids and lowercase usernames), `/purge` on or off |
 | `handlers` | Name and active version per bot |
 | `handler_versions` | Code and comment of every saved version |
 | `routes` | Position, condition, pattern, description, handler, enabled |
@@ -316,7 +326,7 @@ Task statuses: `queued`, `running`, `ok`, `error`, `timeout`, `cancelled`,
    suggestions and handler templates.
 3. **Stage 3 (0.3–0.4, in progress):** extra Python packages for handlers and
    shared modules (0.3), environment variables for handlers from `BOTENV_*` of the
-   runner, allowed users by `@username`, versioned releases (0.4); next: export to Git and consistent SQLite backups, sign-in
+   runner, allowed users by `@username`, versioned releases (0.4), the `/purge` command (0.5); next: export to Git and consistent SQLite backups, sign-in
    through the reverse proxy, simple charts.
 4. **Later, maybe:** user-bots (a Telegram user account driven by code) for
    conversations with third-party bots; an AI assistant in the editor.

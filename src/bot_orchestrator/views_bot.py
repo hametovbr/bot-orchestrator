@@ -8,7 +8,7 @@ from typing import Annotated, Any
 from fastapi import Body, Depends, FastAPI, Form, HTTPException, Request
 from fastapi.responses import FileResponse
 
-from .service import BotError, Orchestrator
+from .service import PURGE_HANDLER, BotError, Orchestrator
 from .ui import Ui
 from .updates import normalize_allowed
 
@@ -195,6 +195,7 @@ def register(app: FastAPI, ui: Ui) -> None:
             secrets=await o.db.list_secret_names(bot_id),
             kv=await o.db.kv_list(bot_id),
             senders=await o.db.recent_senders(limit=8, bot_id=bot_id),
+            purge_handler=PURGE_HANDLER,
         )
 
     @app.post("/bots/{bot_id}/pause")
@@ -230,6 +231,22 @@ def register(app: FastAPI, ui: Ui) -> None:
             "Allowed users saved."
             if entries
             else "Allowed users cleared: the bot handles updates from everyone.",
+            "success",
+        )
+        return ui.back(f"/bots/{bot_id}/settings")
+
+    @app.post("/bots/{bot_id}/purge-command")
+    async def purge_command(
+        request: Request, o: Orch, bot_id: int, enabled: Annotated[str, Form()] = ""
+    ):
+        await ui.bot(bot_id)
+        on = enabled == "on"
+        await o.db.set_purge_command(bot_id, on)
+        ui.flash(
+            request,
+            "/purge is on: it deletes the last 48 hours of a private chat."
+            if on
+            else "/purge is off: the command goes to your routes like any other.",
             "success",
         )
         return ui.back(f"/bots/{bot_id}/settings")

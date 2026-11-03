@@ -11,9 +11,14 @@ Source of truth: `bot-orchestrator/src/bot_orchestrator/routing.py`, `updates.py
    nothing runs. Usernames match case-insensitively; updates without a sender
    (for example channel posts from a chat without a username) are ignored when
    the list is set. Handlers never need to check the sender for this.
-3. The bot's **routes** are checked from top to bottom; the first enabled match
+3. If the bot has the built-in **`/purge`** command on (Settings tab), a `/purge`
+   in a private chat never reaches handlers: the orchestrator deletes that chat's
+   messages of the last 48 hours (both sides, keeping `/start`, including the
+   command). Do not write a `/purge` handler or route for such a bot; they would
+   never run.
+4. The bot's **routes** are checked from top to bottom; the first enabled match
    runs the **active version** of its handler. No match: status `no_route`.
-4. The handler runs in bot-runner; the update log stores the status, duration,
+5. The handler runs in bot-runner; the update log stores the status, duration,
    logs, Bot API calls, started tasks and the traceback.
 
 A bot has several named handlers; each save is a new version and becomes active.

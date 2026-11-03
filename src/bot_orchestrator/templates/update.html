@@ -7,7 +7,7 @@
   <div>Update id</div><div>{{ u.update_id }}</div>
   <div>Type</div><div>{{ u.kind }}</div>
   <div>From</div><div>{{ u.from_name or "" }} {% if u.from_id %}<span class="muted">({{ u.from_id }})</span>{% endif %}</div>
-  <div>Route</div><div>{% if route %}<a href="/bots/{{ bot.id }}/routes/{{ route.id }}">{{ route | route }}</a>{% elif u.kind == "schedule" %}schedule{% else %}<span class="muted">none</span>{% endif %}</div>
+  <div>Route</div><div>{% if route %}<a href="/bots/{{ bot.id }}/routes/{{ route.id }}">{{ route | route }}</a>{% elif u.kind == "schedule" %}schedule{% elif u.handler_name %}{{ u.handler_name }}{% else %}<span class="muted">none</span>{% endif %}</div>
   <div>Handler</div><div>{% if u.handler_id %}<a href="/bots/{{ bot.id }}/handlers/{{ u.handler_id }}">{{ u.handler_name }}</a>{% if u.handler_version %} v{{ u.handler_version }}{% endif %}{% else %}<span class="muted">none</span>{% endif %}</div>
   <div>Result</div><div>{{ status_badge(u.status) }}{% if u.duration_ms is not none %} {{ u.duration_ms | duration }}{% endif %}</div>
 </div>

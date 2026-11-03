@@ -14,7 +14,7 @@ from zoneinfo import ZoneInfo
 
 import httpx
 
-from . import cron, maintenance
+from . import cron, maintenance, purge
 from .config import Settings
 from .db import Database
 from .notify import Notifier
@@ -23,6 +23,8 @@ from .routing import find_route
 from .security import Cipher, mask, mask_value
 from .telegram import BotApi, TelegramError
 from .updates import describe, parse_allowed, sender
+
+PURGE_HANDLER = "/purge (built-in)"
 
 log = logging.getLogger("bot_orchestrator")
 
@@ -261,6 +263,12 @@ class Orchestrator:
         if not parse_allowed(bot["allowed_users"]).permits(sender(update)):
             await self.db.add_update(bot["id"], update, status="ignored", **info)
             return
+        if bot.get("purge_command") and purge.is_purge(update, bot["username"]):
+            row_id = await self.db.add_update(
+                bot["id"], update, status="pending", handler_name=PURGE_HANDLER, **info
+            )
+            self.spawn(self._purge(bot, row_id, update))
+            return
         route = await self.match_route(bot, update)
         if route is None:
             await self.db.add_update(bot["id"], update, status="no_route", **info)
@@ -275,6 +283,18 @@ class Orchestrator:
             **info,
         )
         self.spawn(self._handle(bot, row_id, update, route["handler_id"]))
+
+    async def _purge(self, bot: dict[str, Any], row_id: int, update: dict[str, Any]) -> None:
+        """Run the built-in /purge command; see purge.py."""
+        message = update["message"]
+        chat_id = message["chat"]["id"]
+        history = await self.db.chat_messages(bot["id"], chat_id)
+        chat_plan = purge.plan(chat_id, message["message_id"], history)
+        try:
+            result = await purge.execute(self.local_api(self.token_of(bot)), chat_plan)
+        except TelegramError as exc:
+            result = {"status": "error", "error": exc.description, "logs": [], "api_calls": []}
+        await self.db.finish_update(row_id, **result)
 
     async def _handle(
         self, bot: dict[str, Any], row_id: int, update: dict[str, Any], handler_id: int

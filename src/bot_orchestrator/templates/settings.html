@@ -33,6 +33,19 @@
 </section>
 
 <section class="card">
+  <h2>Clear chat command</h2>
+  <p class="muted small">When on, <code>/purge</code> sent to the bot in a private chat deletes the messages of that
+    chat from the last 48 hours, both the user's and the bot's, including the command itself. <code>/start</code>
+    messages are kept, and the bot is not blocked. Telegram does not let bots delete older messages, so they stay.
+    The command is handled before routes and appears in the update log as <em>{{ purge_handler }}</em>.</p>
+  <form method="post" action="/bots/{{ bot.id }}/purge-command" class="row">
+    <label class="row"><input type="checkbox" name="enabled" {% if bot.purge_command %}checked{% endif %}>
+      Handle <code>/purge</code></label>
+    <button>Save</button>
+  </form>
+</section>
+
+<section class="card">
   <h2>Secrets</h2>
   <p class="muted small">Encrypted at rest and passed to the handler as <code>ctx.secrets["NAME"]</code>. Values are never shown again.</p>
   {% if secrets %}

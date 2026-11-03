@@ -9,7 +9,7 @@ from typing import Any
 
 import aiosqlite
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 # Tables shared by every schema version.
 BASE_SCHEMA = """
@@ -205,6 +205,11 @@ CREATE TABLE module_versions (
 ALTER TABLE tasks ADD COLUMN modules TEXT NOT NULL DEFAULT '{}';
 """
 
+# Version 4: the built-in /purge command, off by default.
+MIGRATE_3_TO_4 = """
+ALTER TABLE bots ADD COLUMN purge_command INTEGER NOT NULL DEFAULT 0;
+"""
+
 
 def _row(row: aiosqlite.Row | None) -> dict[str, Any] | None:
     return dict(row) if row is not None else None
@@ -246,11 +251,13 @@ class Database:
         if version >= SCHEMA_VERSION:
             return
         if not has_tables:
-            script = BASE_SCHEMA + V2_TABLES + V2_UPDATE_COLUMNS + MIGRATE_2_TO_3
+            script = BASE_SCHEMA + V2_TABLES + V2_UPDATE_COLUMNS + MIGRATE_2_TO_3 + MIGRATE_3_TO_4
         elif version in (0, 1):
-            script = MIGRATE_1_TO_2 + MIGRATE_2_TO_3
+            script = MIGRATE_1_TO_2 + MIGRATE_2_TO_3 + MIGRATE_3_TO_4
         elif version == 2:
-            script = MIGRATE_2_TO_3
+            script = MIGRATE_2_TO_3 + MIGRATE_3_TO_4
+        elif version == 3:
+            script = MIGRATE_3_TO_4
         else:
             raise RuntimeError(f"unknown database schema version {version}")
         # One transaction: a failed migration leaves the database untouched.
@@ -339,6 +346,24 @@ class Database:
 
     async def set_allowed_users(self, bot_id: int, allowed: str) -> None:
         await self._exec("UPDATE bots SET allowed_users = ? WHERE id = ?", allowed, bot_id)
+
+    async def set_purge_command(self, bot_id: int, enabled: bool) -> None:
+        await self._exec("UPDATE bots SET purge_command = ? WHERE id = ?", int(enabled), bot_id)
+
+    async def chat_messages(self, bot_id: int, chat_id: int) -> list[dict[str, Any]]:
+        """Incoming messages of a chat still in the update log: message_id, date, text."""
+        return await self._all(
+            """
+            SELECT json_extract(raw, '$.message.message_id') AS message_id,
+                   json_extract(raw, '$.message.date') AS date,
+                   json_extract(raw, '$.message.text') AS text
+              FROM updates
+             WHERE bot_id = ? AND kind = 'message'
+               AND json_extract(raw, '$.message.chat.id') = ?
+            """,
+            bot_id,
+            chat_id,
+        )
 
     async def delete_bot(self, bot_id: int) -> None:
         await self._exec("DELETE FROM bots WHERE id = ?", bot_id)

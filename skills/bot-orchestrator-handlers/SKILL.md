@@ -10,7 +10,7 @@ local Telegram Bot API server. Bot logic is Python code written in its web UI an
 executed by bot-runner. This skill describes that code: what it may use, how it
 runs and how to hand it over.
 
-Matches **bot-orchestrator 0.4.0** and **bot-runner 0.4.0**.
+Matches **bot-orchestrator 0.5.0** and **bot-runner 0.4.0**.
 
 ## Execution model (read first)
 
