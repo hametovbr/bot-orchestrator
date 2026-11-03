@@ -67,8 +67,42 @@ async def fetch(ctx, url):
     await ctx.reply_file(result.path, caption=result.title)  # up to 2 GB
 ```
 
-The full SDK reference is on the handler page and in
-[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#handler-sdk).
+The full SDK reference is in the
+[handler skill](skills/bot-orchestrator-handlers/references/sdk.md) and in
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#handler-sdk); the editor suggests
+SDK members as you type.
+
+## Writing handlers with an AI agent
+
+[`skills/bot-orchestrator-handlers`](skills/bot-orchestrator-handlers) is an
+[Agent Skill](https://docs.claude.com/en/docs/agents-and-tools/agent-skills/overview):
+give it to an AI agent and it knows how code for these bots runs, the whole `ctx`
+SDK, routes, schedules, shared modules, packages and limits, and hands back code
+ready to paste together with the route, secrets and packages it needs.
+
+| File | Contents |
+| --- | --- |
+| [`SKILL.md`](skills/bot-orchestrator-handlers/SKILL.md) | Execution model, workflow, rules, what the agent hands over |
+| [`references/sdk.md`](skills/bot-orchestrator-handlers/references/sdk.md) | Every `ctx` member with arguments, results and errors |
+| [`references/platform.md`](skills/bot-orchestrator-handlers/references/platform.md) | Routes, update types, schedules, modules, packages, limits, test runs |
+| [`references/examples.md`](skills/bot-orchestrator-handlers/references/examples.md) | Complete, tested handlers |
+
+Install it for Claude Code (all projects):
+
+```sh
+git clone --depth 1 https://github.com/hametovbr/bot-orchestrator /tmp/bot-orchestrator
+mkdir -p ~/.claude/skills
+cp -r /tmp/bot-orchestrator/skills/bot-orchestrator-handlers ~/.claude/skills/
+```
+
+For a single project use `.claude/skills/` instead. For apps that take skills as
+a ZIP file, upload the folder packed with
+`cd /tmp/bot-orchestrator/skills && zip -r bot-orchestrator-handlers.zip bot-orchestrator-handlers`.
+Other agents can read `SKILL.md` and the `references/` files as plain Markdown.
+
+The skill states the versions it matches and is updated together with the code:
+tests in both repos fail when the SDK, routes or version change without it (see
+[AGENTS.md](AGENTS.md#handler-skill-skillsbot-orchestrator-handlers)).
 
 ## Quick start
 

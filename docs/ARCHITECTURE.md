@@ -111,7 +111,10 @@ description becomes the menu text.
 ## Handler SDK
 
 A handler is code that defines `handle(update, ctx)`, sync or async. The same
-code may define functions to run as background tasks.
+code may define functions to run as background tasks. The complete reference for
+handler authors, kept in sync with the code, is the skill
+[`skills/bot-orchestrator-handlers`](../skills/bot-orchestrator-handlers/SKILL.md);
+this section is a summary.
 
 ```python
 import re
