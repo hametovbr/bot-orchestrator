@@ -8,6 +8,7 @@ import datetime as dt
 import json
 import logging
 import time
+import traceback
 import uuid
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -286,14 +287,16 @@ class Orchestrator:
 
     async def _purge(self, bot: dict[str, Any], row_id: int, update: dict[str, Any]) -> None:
         """Run the built-in /purge command; see purge.py."""
-        message = update["message"]
-        chat_id = message["chat"]["id"]
-        history = await self.db.chat_messages(bot["id"], chat_id)
-        chat_plan = purge.plan(chat_id, message["message_id"], history)
         try:
+            message = update["message"]
+            chat_id = message["chat"]["id"]
+            history = await self.db.chat_messages(bot["id"], chat_id)
+            chat_plan = purge.plan(chat_id, message["message_id"], history)
             result = await purge.execute(self.local_api(self.token_of(bot)), chat_plan)
-        except TelegramError as exc:
-            result = {"status": "error", "error": exc.description, "logs": [], "api_calls": []}
+        except Exception:
+            # Never leave the update pending: record the traceback instead.
+            log.exception("/purge failed for bot %s", bot["id"])
+            result = {"status": "error", "error": mask(traceback.format_exc())}
         await self.db.finish_update(row_id, **result)
 
     async def _handle(

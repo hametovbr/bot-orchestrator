@@ -5,14 +5,17 @@ private chat, though, message ids are one sequence shared by both sides, so ever
 message between two known ids can be deleted by id. A bot may delete incoming and
 outgoing messages there, but only those sent less than 48 hours ago.
 
-The plan therefore takes the range from just after the newest message known to be
-older than the 48-hour window (from the update log) up to the /purge message itself,
-and leaves out every /start command. Older messages stay: Telegram refuses to delete
-them.
+The plan takes the range from just after the newest message known to be older than
+the 48-hour window (from the update log) up to the /purge message itself, and leaves
+out every /start command. Batches are deleted from the newest down, so the recent
+messages go first. A refused batch is split in halves to find what can be deleted;
+a batch where nothing can be deleted means the 48-hour limit was reached, and the
+run stops there. Every run has a time limit.
 """
 
 from __future__ import annotations
 
+import asyncio
 import re
 import time
 from dataclasses import dataclass, field
@@ -26,6 +29,9 @@ DELETABLE_FOR = 47 * 3600
 # Never try more ids than this in one run (100 per request).
 MAX_SPAN = 3000
 BATCH = 100
+# The whole run, including waits for Telegram's flood control.
+TIME_LIMIT = 90.0
+MAX_RETRY_AFTER = 30
 
 _COMMAND_RE = re.compile(r"^/([A-Za-z0-9_]{1,32})(?:@([A-Za-z0-9_]+))?(?:\s|$)")
 
@@ -61,6 +67,11 @@ class Plan:
         keep = set(self.keep)
         return [i for i in range(self.first, self.last + 1) if i not in keep]
 
+    def batches(self) -> list[list[int]]:
+        """Batches of up to 100 ids, the newest batch first."""
+        ids = self.ids
+        return [ids[max(0, end - BATCH) : end] for end in range(len(ids), 0, -BATCH)]
+
 
 def plan(
     chat_id: int, purge_id: int, history: list[dict[str, Any]], now: float | None = None
@@ -71,8 +82,8 @@ def plan(
     ``message_id``, ``date`` (Unix time) and ``text``.
     """
     now = time.time() if now is None else now
-    known = [m for m in history if m["message_id"] < purge_id]
-    old = [m["message_id"] for m in known if m["date"] < now - DELETABLE_FOR]
+    known = [m for m in history if m.get("message_id") and m["message_id"] < purge_id]
+    old = [m["message_id"] for m in known if (m.get("date") or 0) < now - DELETABLE_FOR]
     first = max(old) + 1 if old else 1
     first = max(first, purge_id - MAX_SPAN + 1)
     keep = sorted(
@@ -83,57 +94,93 @@ def plan(
     return Plan(chat_id=chat_id, first=first, last=purge_id, keep=keep)
 
 
-async def execute(api: BotApi, chat_plan: Plan) -> dict[str, Any]:
-    """Delete the planned ids; returns logs and api_calls for the update log."""
+class _Run:
+    def __init__(self, api: BotApi, chat_id: int, deadline: float):
+        self.api = api
+        self.chat_id = chat_id
+        self.deadline = deadline
+        self.requests = 0
+        self.api_calls: list[dict[str, Any]] = []
+        self.errors: dict[str, int] = {}
+
+    def _record(self, ids: list[int], ok: bool, error: str | None = None) -> None:
+        if len(self.api_calls) >= 200:
+            return
+        call: dict[str, Any] = {
+            "method": "deleteMessages",
+            "params": {"chat_id": self.chat_id, "message_ids": f"{ids[0]}-{ids[-1]} ({len(ids)})"},
+            "ok": ok,
+        }
+        if error:
+            call["error"] = error
+        self.api_calls.append(call)
+
+    async def delete(self, ids: list[int]) -> bool:
+        """One deleteMessages call; waits once for flood control. True if accepted."""
+        for _ in range(2):
+            if time.monotonic() > self.deadline:
+                raise TimeoutError
+            self.requests += 1
+            data = await self.api.raw(
+                "deleteMessages", {"chat_id": self.chat_id, "message_ids": ids}
+            )
+            if data.get("ok"):
+                self._record(ids, True)
+                return True
+            retry_after = (data.get("parameters") or {}).get("retry_after")
+            if data.get("error_code") == 429 and retry_after is not None:
+                await asyncio.sleep(min(float(retry_after), MAX_RETRY_AFTER))
+                continue
+            description = str(data.get("description") or "unknown error")
+            self.errors[description] = self.errors.get(description, 0) + 1
+            self._record(ids, False, description)
+            return False
+        return False
+
+    async def delete_some(self, ids: list[int]) -> int:
+        """Delete what can be deleted; returns how many ids were accepted."""
+        if await self.delete(ids):
+            return len(ids)
+        if len(ids) == 1:
+            return 0
+        # Refused as a whole: some messages are too old (or cannot be deleted). The
+        # newer half is the more likely to succeed.
+        middle = len(ids) // 2
+        newer = await self.delete_some(ids[middle:])
+        if newer == 0:
+            # Nothing new is deletable, so nothing older is either.
+            return 0
+        return newer + await self.delete_some(ids[:middle])
+
+
+async def execute(api: BotApi, chat_plan: Plan, time_limit: float = TIME_LIMIT) -> dict[str, Any]:
+    """Delete the planned ids; returns status, logs and api_calls for the update log."""
     started = time.monotonic()
-    ids = chat_plan.ids
+    run = _Run(api, chat_plan.chat_id, started + time_limit)
     logs = [
-        f"Deleting messages {chat_plan.first}-{chat_plan.last} ({len(ids)} ids)"
+        f"Range {chat_plan.first}-{chat_plan.last} ({len(chat_plan.ids)} ids)"
         + (f", keeping /start: {', '.join(map(str, chat_plan.keep))}" if chat_plan.keep else "")
     ]
-    api_calls: list[dict[str, Any]] = []
-    failed_batches = 0
-    single_failures = 0
-    for start in range(0, len(ids), BATCH):
-        batch = ids[start : start + BATCH]
-        params = {"chat_id": chat_plan.chat_id, "message_ids": batch}
-        summary = {"chat_id": chat_plan.chat_id, "message_ids": f"{batch[0]}-{batch[-1]}"}
-        try:
-            await api.call("deleteMessages", params)
-            api_calls.append({"method": "deleteMessages", "params": summary, "ok": True})
-            continue
-        except TelegramError as exc:
-            if exc.unreachable:
-                raise
-            failed_batches += 1
-            api_calls.append(
-                {
-                    "method": "deleteMessages",
-                    "params": summary,
-                    "ok": False,
-                    "error": exc.description,
-                }
-            )
-        # The batch was refused as a whole (for example it held a message that is too
-        # old): delete its messages one by one and skip the ones Telegram refuses.
-        for message_id in batch:
-            try:
-                await api.call(
-                    "deleteMessage", {"chat_id": chat_plan.chat_id, "message_id": message_id}
-                )
-            except TelegramError as exc:
-                if exc.unreachable:
-                    raise
-                single_failures += 1
-    if failed_batches:
-        logs.append(
-            f"{failed_batches} batch(es) refused; retried one by one, "
-            f"{single_failures} message(s) could not be deleted (too old or already gone)"
-        )
-    logs.append("Done")
+    status, error = "ok", None
+    accepted = 0
+    try:
+        for batch in chat_plan.batches():
+            done = await run.delete_some(batch)
+            accepted += done
+            if done < len(batch):
+                logs.append(f"Stopped at {batch[0]}-{batch[-1]}: older messages cannot be deleted")
+                break
+    except TimeoutError:
+        status, error = "timeout", f"stopped after {time_limit:g} s"
+    except TelegramError as exc:
+        status, error = "error", str(exc)
+    logs.append(f"{run.requests} request(s), {accepted} id(s) accepted")
+    for description, count in run.errors.items():
+        logs.append(f"Telegram refused {count} request(s): {description}")
     return {
-        "status": "ok",
+        "status": status,
+        "error": error,
         "logs": logs,
-        "api_calls": api_calls[:200],
+        "api_calls": run.api_calls,
         "duration_ms": int((time.monotonic() - started) * 1000),
     }

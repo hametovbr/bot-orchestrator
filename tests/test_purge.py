@@ -7,6 +7,7 @@ from bot_orchestrator.telegram import BotApi
 
 NOW = 1_800_000_000.0
 HOUR = 3600
+REFUSED = {"ok": False, "error_code": 400, "description": "message can't be deleted"}
 
 
 def msg(message_id: int, hours_ago: float, text: str = "hi") -> dict:
@@ -49,33 +50,73 @@ def test_plan_without_old_messages_is_capped():
     assert purge.plan(42, 7, [], now=NOW).ids == list(range(1, 8))
 
 
-async def test_execute_batches_and_falls_back_one_by_one():
-    calls: list[tuple[str, dict]] = []
+class FakeApi:
+    """deleteMessages refuses any batch holding an id below `oldest`."""
 
-    def respond(request: httpx.Request) -> httpx.Response:
-        method = request.url.path.rsplit("/", 1)[1]
-        params = json.loads(request.content)
-        calls.append((method, params))
-        if method == "deleteMessages" and 1 in params["message_ids"]:
+    def __init__(self, oldest: int, flood_once: bool = False):
+        self.oldest = oldest
+        self.flood_once = flood_once
+        self.calls: list[list[int]] = []
+
+    def __call__(self, request: httpx.Request) -> httpx.Response:
+        ids = json.loads(request.content)["message_ids"]
+        self.calls.append(ids)
+        if self.flood_once:
+            self.flood_once = False
             return httpx.Response(
-                400,
-                json={"ok": False, "error_code": 400, "description": "message can't be deleted"},
+                429,
+                json={
+                    "ok": False,
+                    "error_code": 429,
+                    "description": "Too Many Requests",
+                    "parameters": {"retry_after": 0},
+                },
             )
-        if method == "deleteMessage" and params["message_id"] == 1:
-            return httpx.Response(
-                400,
-                json={"ok": False, "error_code": 400, "description": "message can't be deleted"},
-            )
+        if min(ids) < self.oldest:
+            return httpx.Response(400, json=REFUSED)
         return httpx.Response(200, json={"ok": True, "result": True})
 
-    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as http:
-        api = BotApi(http, "http://api", "123:abc")
-        result = await purge.execute(api, purge.Plan(chat_id=42, first=1, last=150, keep=[3]))
-    batches = [p["message_ids"] for m, p in calls if m == "deleteMessages"]
-    assert [len(b) for b in batches] == [100, 49]
-    assert 3 not in batches[0]
-    singles = [p["message_id"] for m, p in calls if m == "deleteMessage"]
-    assert singles == batches[0]
+
+async def run(fake: FakeApi, chat_plan: purge.Plan, **options) -> dict:
+    async with httpx.AsyncClient(transport=httpx.MockTransport(fake)) as http:
+        return await purge.execute(BotApi(http, "http://api", "123:abc"), chat_plan, **options)
+
+
+def test_batches_newest_first():
+    batches = purge.Plan(chat_id=1, first=1, last=250, keep=[3]).batches()
+    assert [len(b) for b in batches] == [100, 100, 49]
+    assert batches[0][-1] == 250 and batches[-1][0] == 1 and 3 not in batches[-1]
+
+
+async def test_execute_deletes_everything_when_all_is_recent():
+    fake = FakeApi(oldest=0)
+    result = await run(fake, purge.Plan(chat_id=1, first=1, last=250))
     assert result["status"] == "ok"
-    assert "1 message(s) could not be deleted" in result["logs"][1]
-    assert [c["ok"] for c in result["api_calls"]] == [False, True]
+    assert len(fake.calls) == 3
+    assert sorted(i for c in fake.calls for i in c) == list(range(1, 251))
+
+
+async def test_execute_finds_the_boundary_and_stops():
+    fake = FakeApi(oldest=170)
+    result = await run(fake, purge.Plan(chat_id=1, first=1, last=300))
+    assert result["status"] == "ok"
+    accepted = sorted(i for c in fake.calls if min(c) >= 170 for i in c)
+    assert accepted == list(range(170, 301))
+    # The batch with 101-200 is split; the batch with 1-100 is never tried.
+    assert all(max(c) > 100 for c in fake.calls)
+    assert len(fake.calls) < 40
+    assert any("Stopped at" in line for line in result["logs"])
+
+
+async def test_execute_waits_for_flood_control():
+    fake = FakeApi(oldest=0, flood_once=True)
+    result = await run(fake, purge.Plan(chat_id=1, first=1, last=10))
+    assert result["status"] == "ok"
+    assert len(fake.calls) == 2
+
+
+async def test_execute_has_a_time_limit():
+    fake = FakeApi(oldest=0)
+    result = await run(fake, purge.Plan(chat_id=1, first=1, last=500), time_limit=-1)
+    assert result["status"] == "timeout"
+    assert fake.calls == []

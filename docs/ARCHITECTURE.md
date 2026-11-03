@@ -54,9 +54,13 @@ This document describes the current design. It changes as the project develops.
   The Bot API cannot read or clear a chat's history, but message ids in a private
   chat are one sequence for both sides, and bots may delete both sides' messages
   younger than 48 hours. The range runs from just after the newest message in the
-  update log older than 47 hours (at most 3000 ids) to the `/purge` message itself;
-  a refused batch is retried one message at a time. The run is logged as an update
-  with the handler name `/purge (built-in)`. Nothing runs in the runner.
+  update log older than 47 hours (at most 3000 ids) to the `/purge` message itself.
+  Batches of 100 go from the newest down; a refused batch is split in halves to
+  find what is deletable, and the first batch with refused messages marks the
+  48-hour limit, where the run stops. Flood control (`retry_after`) is respected;
+  a run is limited to 90 s. Any failure ends the run as `error` or `timeout`, so it
+  never stays `pending`. The run is logged as an update with the handler name
+  `/purge (built-in)`. Nothing runs in the runner.
 - Background tasks: a queue in the database, run `TASK_CONCURRENCY` at a time
   across all bots, cancellable from the UI or from handler code.
 - Schedules: a five-field cron per schedule in the `TZ` timezone, checked at the

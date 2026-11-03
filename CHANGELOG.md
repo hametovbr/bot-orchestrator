@@ -13,8 +13,9 @@ meant to run with release `X.Y.Z` of
   default). In a private chat it deletes the messages of the last 48 hours, the
   user's and the bot's, including the command itself and keeping `/start`, without
   blocking the bot. Telegram does not let bots delete older messages, so they stay.
-  The run appears in the update log as `/purge (built-in)`. Works with bot-runner
-  0.4.0.
+  Deletion goes from the newest messages down and stops at the 48-hour limit,
+  usually within seconds (at most 90 s). The run appears in the update log as
+  `/purge (built-in)` with its outcome. Works with bot-runner 0.4.0.
 - The update log shows built-in handlers by name.
 
 ### Changed

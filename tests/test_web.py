@@ -222,7 +222,9 @@ def test_purge_command(logged_in, fake):
     fake.pending.append(recent(406, "/purge@test_bot"))
     rows = wait_for(logged_in, lambda r: len(r) == 3 and r[0]["status"] == "ok")
     assert rows[0]["handler_name"] == "/purge (built-in)"
-    deleted = [i for m, b in fake.local_calls if m == "deleteMessages" for i in b["message_ids"]]
+    deleted = sorted(
+        i for m, b in fake.local_calls if m == "deleteMessages" for i in b["message_ids"]
+    )
     # Message ids equal update ids here; all messages are recent and /start (400) is kept.
     assert deleted == list(range(1, 400)) + list(range(401, 407))
     runs_before = len(fake.runs)
