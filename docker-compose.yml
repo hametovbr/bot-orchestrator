@@ -79,6 +79,9 @@ services:
       # Keep these above the runner's HANDLER_TIMEOUT and TASK_TIMEOUT.
       RUNNER_REQUEST_TIMEOUT: ${RUNNER_REQUEST_TIMEOUT:-180}
       TASK_REQUEST_TIMEOUT: ${TASK_REQUEST_TIMEOUT:-7200}
+      # MCP endpoint for AI agents at /mcp; empty token disables it.
+      MCP_TOKEN: ${MCP_TOKEN:-}
+      MCP_READ_ONLY: ${MCP_READ_ONLY:-false}
     volumes:
       - orchestrator-data:/data
       - bot-files:/files

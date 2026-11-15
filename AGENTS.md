@@ -40,6 +40,18 @@ when the design changes.
    `:X.Y` and creates the GitHub release with that changelog section as notes.
    `:latest` and `:<commit sha>` are published from `main`.
 
+## Code structure
+
+- Every change of state goes through an operation in `src/bot_orchestrator/ops/`;
+  rules (validation, side effects) live there only. The web views and the MCP
+  server (`mcp_server.py`) are thin adapters over it. See "Code structure of the
+  orchestrator" in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+- Operations raise `errors.OpError` subclasses, not `HTTPException`, and never
+  return bot tokens or secret values.
+- A new UI capability gets a matching MCP tool in the same change (and the
+  reverse), listed in the MCP section of `docs/ARCHITECTURE.md`; mark read-only
+  and destructive tools correctly, since `MCP_READ_ONLY` relies on it.
+
 ## Invariants
 
 - A bot is a database record; adding a bot must never require editing
@@ -48,6 +60,7 @@ when the design changes.
 - The local Bot API data directory is mounted at the same path in every
   container.
 - Bot tokens are masked in logs, the API console and the update log.
+- The MCP endpoint does not exist unless `MCP_TOKEN` is set.
 
 ## Handler skill (`skills/bot-orchestrator-handlers`)
 

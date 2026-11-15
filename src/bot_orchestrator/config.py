@@ -52,6 +52,11 @@ class Settings(BaseSettings):
     # Send a notification when the disk with bot files is fuller than this, in percent.
     disk_warning_percent: int = 90
 
+    # Bearer token for the MCP endpoint (/mcp) used by AI agents. Empty disables it.
+    mcp_token: str = ""
+    # Offer only tools that read state, no tools that change it.
+    mcp_read_only: bool = False
+
 
 @lru_cache
 def get_settings() -> Settings:

@@ -5,21 +5,23 @@ from __future__ import annotations
 import datetime as dt
 import json
 import re
+from collections.abc import Awaitable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from zoneinfo import ZoneInfo
 
-from fastapi import HTTPException, Request
+from fastapi import Request
 from fastapi.responses import RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 
 from . import __version__
 from .config import Settings
+from .errors import NotFound, OpError
 from .routing import describe as describe_route
 from .routing import pattern_text
-from .security import short_token
 
 if TYPE_CHECKING:
+    from .ops import Operations
     from .service import Orchestrator
 
 HERE = Path(__file__).parent
@@ -49,6 +51,9 @@ def human_duration(ms: int | None) -> str:
     return f"{hours} h {minutes} min"
 
 
+# Returned by Ui.act when an operation failed and its error was shown as a flash message.
+FAILED: Any = object()
+
 _NO_MODULE = re.compile(r"No module named '([^']+)'")
 
 
@@ -71,6 +76,7 @@ class Ui:
         env.filters["size"] = human_size
         env.filters["duration"] = human_duration
         env.filters["pretty"] = lambda v: json.dumps(v, ensure_ascii=False, indent=2)
+        env.filters["compact"] = lambda v: json.dumps(v, ensure_ascii=False)
         env.filters["route"] = describe_route
         env.filters["route_pattern"] = pattern_text
         env.filters["missing_module"] = missing_module
@@ -85,6 +91,9 @@ class Ui:
     def orch(self) -> Orchestrator:
         return self._state["o"]
 
+    def ops(self) -> Operations:
+        return self._state["ops"]
+
     @staticmethod
     def flash(request: Request, message: str, kind: str = "info") -> None:
         # Reassign instead of appending in place: the session only notices top-level changes.
@@ -97,21 +106,30 @@ class Ui:
         messages = request.session.pop("flash", [])
         return self.templates.TemplateResponse(request, name, {"messages": messages, **context})
 
+    async def act(self, request: Request, operation: Awaitable[Any]) -> Any:
+        """Await an operation; show a user error as a flash message and return FAILED.
+
+        NotFound is not caught, so a missing bot or handler still answers 404.
+        """
+        try:
+            return await operation
+        except NotFound:
+            raise
+        except OpError as exc:
+            self.flash(request, str(exc), "error")
+            return FAILED
+
+    def flash_warnings(self, request: Request, result: dict[str, Any]) -> None:
+        for warning in result.get("warnings", []):
+            self.flash(request, warning, "warning")
+
     @staticmethod
     def back(url: str) -> RedirectResponse:
         return RedirectResponse(url, status_code=303)
 
     async def bot(self, bot_id: int) -> dict[str, Any]:
-        o = self.orch()
-        bot = await o.db.get_bot(bot_id)
-        if not bot:
-            raise HTTPException(status_code=404, detail="Bot not found")
-        bot["token_hint"] = short_token(o.token_of(bot))
-        bot["polling"] = o.is_polling(bot_id)
-        return bot
+        """The bot for a page (raises NotFound, shown as 404)."""
+        return await self.ops().bots.get(bot_id)
 
     async def handler(self, bot_id: int, handler_id: int) -> dict[str, Any]:
-        handler = await self.orch().db.get_handler(bot_id, handler_id)
-        if not handler:
-            raise HTTPException(status_code=404, detail="Handler not found")
-        return handler
+        return await self.ops().handlers.handler_row(bot_id, handler_id)

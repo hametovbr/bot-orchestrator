@@ -11,16 +11,17 @@ from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.sessions import SessionMiddleware
 
-from . import __version__, internal_api, maintenance, views_bot, views_logic, views_shared
+from . import __version__, internal_api, mcp_server, views_bot, views_logic, views_shared
 from .config import Settings, get_settings
 from .db import Database
-from .notify import EVENTS, Notifier
-from .security import TOKEN_FORMAT
-from .service import BotError, Orchestrator
-from .telegram import TelegramError
-from .ui import HERE, Ui, human_size
+from .errors import OpError
+from .notify import EVENTS
+from .ops import Operations
+from .service import Orchestrator
+from .ui import FAILED, HERE, Ui, human_size
 
-PUBLIC_PATHS = ("/login", "/static/", "/health", "/internal/")
+# Paths with their own authentication (or none); everything else needs a session.
+PUBLIC_PATHS = ("/login", "/static/", "/health", "/internal/", mcp_server.PATH)
 
 
 def create_app(
@@ -29,6 +30,7 @@ def create_app(
     settings = settings or get_settings()
     state: dict[str, Any] = {}
     ui = Ui(settings, state)
+    mcp_endpoint = mcp_server.McpEndpoint(settings, ui.ops)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -38,9 +40,11 @@ def create_app(
             db = Database(settings.database_path)
             await db.connect()
             state["o"] = Orchestrator(settings, db)
+        state["ops"] = Operations(state["o"])
         await state["o"].start()
         try:
-            yield
+            async with mcp_endpoint.running():
+                yield
         finally:
             await state["o"].stop()
             await state["o"].db.close()
@@ -53,7 +57,12 @@ def create_app(
         redoc_url=None,
         openapi_url=None,
     )
-    Orch = Annotated[Orchestrator, Depends(ui.orch)]
+    Ops = Annotated[Operations, Depends(ui.ops)]
+
+    @app.exception_handler(OpError)
+    async def op_error(request: Request, exc: OpError):
+        # Errors the views let through (NotFound above all) answer like HTTPException.
+        return JSONResponse({"detail": str(exc)}, status_code=exc.status)
 
     @app.middleware("http")
     async def guard(request: Request, call_next):
@@ -108,27 +117,20 @@ def create_app(
     # Bot list
 
     @app.get("/")
-    async def index(request: Request, o: Orch):
-        bots = await o.db.list_bots()
-        for bot in bots:
-            bot["polling"] = o.is_polling(bot["id"])
-        return ui.render(request, "index.html", bots=bots)
+    async def index(request: Request, ops: Ops):
+        return ui.render(request, "index.html", bots=await ops.bots.list())
 
     @app.post("/bots")
     async def add_bot(
         request: Request,
-        o: Orch,
+        ops: Ops,
         token: Annotated[str, Form()],
         log_out_cloud: Annotated[bool, Form()] = False,
     ):
-        if not TOKEN_FORMAT.match(token.strip()):
-            ui.flash(request, "That does not look like a bot token (123456:ABC...).", "error")
+        added = await ui.act(request, ops.bots.add(token, log_out_cloud))
+        if added is FAILED:
             return ui.back("/")
-        try:
-            bot, notes = await o.add_bot(token, log_out_cloud)
-        except BotError as exc:
-            ui.flash(request, str(exc), "error")
-            return ui.back("/")
+        bot, notes = added
         for note in notes:
             ui.flash(request, note)
         ui.flash(request, f"@{bot['username']} added and polling started.", "success")
@@ -137,63 +139,46 @@ def create_app(
     # Global settings
 
     @app.get("/settings")
-    async def app_settings(request: Request, o: Orch):
-        cache = await asyncio.to_thread(maintenance.cache_usage, settings.bot_api_data_dir)
-        disk = await asyncio.to_thread(maintenance.disk_percent_used, settings.files_root)
-        files = await asyncio.to_thread(maintenance.folder_size, settings.files_root)
+    async def app_settings(request: Request, ops: Ops):
+        storage = await ops.system.storage()
         return ui.render(
             request,
             "app_settings.html",
-            notify=await o.notifier.config(),
+            notify=await ops.orchestrator.notifier.config(),
             events=EVENTS,
-            bots=await o.db.list_bots(),
-            senders=await o.db.recent_senders(),
-            cache=cache,
-            disk=disk,
-            files_size=files,
+            bots=await ops.bots.list(),
+            senders=await ops.bots.recent_senders(),
+            cache={"files": storage["cache_files"], "bytes": storage["cache_bytes"]},
+            disk=storage["disk_percent_used"],
+            files_size=storage["files_bytes"],
             settings=settings,
+            mcp_enabled=bool(settings.mcp_token),
         )
 
     @app.post("/settings/notifications")
-    async def save_notifications(request: Request, o: Orch):
+    async def save_notifications(request: Request, ops: Ops):
         form = await request.form()
-        bot_id = str(form.get("notify_bot_id") or "")
-        chat_id = str(form.get("notify_chat_id") or "").strip()
-        if chat_id and not chat_id.lstrip("-").isdigit():
-            ui.flash(request, "The chat id must be a number, e.g. your Telegram user id.", "error")
-            return ui.back("/settings")
-        await o.db.set_setting("notify_bot_id", int(bot_id) if bot_id.isdigit() else None)
-        await o.db.set_setting("notify_chat_id", int(chat_id) if chat_id else None)
-        await o.db.set_setting(
-            "notify_events", [e for e in form.getlist("notify_events") if e in EVENTS]
+        saved = await ui.act(
+            request,
+            ops.system.set_notifications(
+                str(form.get("notify_bot_id") or ""),
+                str(form.get("notify_chat_id") or ""),
+                [e for e in form.getlist("notify_events") if e in EVENTS],
+            ),
         )
-        ui.flash(request, "Notification settings saved.", "success")
+        if saved is not FAILED:
+            ui.flash(request, "Notification settings saved.", "success")
         return ui.back("/settings")
 
     @app.post("/settings/notifications/test")
-    async def test_notification(request: Request, o: Orch):
-        config = await o.notifier.config()
-        if not config["notify_bot_id"] or not config["notify_chat_id"]:
-            ui.flash(request, "Choose a bot and a chat first.", "error")
-            return ui.back("/settings")
-        try:
-            await Notifier(o).deliver(
-                config["notify_bot_id"],
-                config["notify_chat_id"],
-                "✅ Test notification from Bot Orchestrator." + o.notifier.link("/settings"),
-            )
+    async def test_notification(request: Request, ops: Ops):
+        if await ui.act(request, ops.system.test_notification()) is not FAILED:
             ui.flash(request, "Test notification sent.", "success")
-        except TelegramError as exc:
-            ui.flash(
-                request,
-                f"Could not send: {exc.description}. The chat must have started the bot first.",
-                "error",
-            )
         return ui.back("/settings")
 
     @app.post("/settings/cache/clean")
-    async def clean_cache(request: Request, o: Orch, hours: Annotated[float, Form()] = 0):
-        removed = await o.clean_cache(max(hours, 0))
+    async def clean_cache(request: Request, ops: Ops, hours: Annotated[float, Form()] = 0):
+        removed = await ops.system.clean_cache(hours)
         ui.flash(
             request,
             f"Removed {removed.files} cached files ({human_size(removed.bytes)}).",
@@ -205,6 +190,7 @@ def create_app(
     views_logic.register(app, ui)
     views_shared.register(app, ui)
     internal_api.register(app, ui)
+    mcp_endpoint.register(app)
     return app
 
 

@@ -11,6 +11,8 @@ ENV UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy UV_PROJECT_ENVIRONMENT=/app/.venv
 COPY pyproject.toml uv.lock README.md ./
 RUN uv sync --frozen --no-dev --no-install-project
 COPY src ./src
+# The handler reference, served to AI agents by the MCP endpoint.
+COPY skills ./skills
 RUN uv sync --frozen --no-dev
 
 ENV PATH="/app/.venv/bin:$PATH" PYTHONUNBUFFERED=1

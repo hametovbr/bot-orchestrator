@@ -70,7 +70,7 @@
   {% if kv %}
   <table class="table compact"><tbody>
     {% for row in kv %}
-    <tr><td><code>{{ row.key }}</code></td><td class="mono small ellipsis">{{ row.value }}</td>
+    <tr><td><code>{{ row.key }}</code></td><td class="mono small ellipsis">{{ row.value | compact }}</td>
       <td class="small nowrap">{{ row.updated_at | time }}</td>
       <td class="right"><form method="post" action="/bots/{{ bot.id }}/kv/delete">
         <input type="hidden" name="key" value="{{ row.key }}"><button class="small danger">Delete</button></form></td></tr>

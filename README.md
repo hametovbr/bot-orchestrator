@@ -110,6 +110,29 @@ The skill states the versions it matches and is updated together with the code:
 tests in both repos fail when the SDK, routes or version change without it (see
 [AGENTS.md](AGENTS.md#handler-skill-skillsbot-orchestrator-handlers)).
 
+## Managing the platform with an AI agent (MCP)
+
+The orchestrator is also an [MCP](https://modelcontextprotocol.io) server, so an
+AI agent (Claude Code, Claude Desktop, Cursor and others) can see and change
+everything the web UI can: add and pause bots, read the update log and errors,
+write, test and roll back handlers and shared modules, edit routes and publish
+the command menu, manage schedules, tasks, packages, secrets, stored values and
+files, and call any Bot API method. It runs the same checks as the UI.
+
+Set `MCP_TOKEN` in `.env` (for example `openssl rand -hex 32`) and restart the
+orchestrator; the endpoint is `http://<host>:8000/mcp` (Streamable HTTP) with the
+header `Authorization: Bearer <MCP_TOKEN>`. For Claude Code:
+
+```sh
+claude mcp add --transport http bot-orchestrator http://<host>:8000/mcp \
+  --header "Authorization: Bearer <MCP_TOKEN>"
+```
+
+With `MCP_READ_ONLY=true` the agent only gets tools that read. The handler
+reference from the skill below is built in (`read_docs` tool and `docs://`
+resources), so the agent knows the `ctx` SDK without installing anything. Tools
+are listed in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#mcp-server).
+
 ## Quick start
 
 Requirements: a Linux host with Docker, and `api_id` / `api_hash` from
@@ -191,8 +214,8 @@ uv run uvicorn --factory bot_orchestrator.web:app --reload
 
 ## Security
 
-Anyone with access to the web UI can run arbitrary code on the server. Keep the
-UI on a local network or behind a VPN. See [SECURITY.md](SECURITY.md).
+Anyone with access to the web UI, or with the MCP token, can run arbitrary code
+on the server. Keep the UI on a local network or behind a VPN. See [SECURITY.md](SECURITY.md).
 
 ## License
 

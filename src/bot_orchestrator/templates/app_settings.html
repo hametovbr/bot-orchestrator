@@ -61,6 +61,7 @@
     <div>Public URL</div><div>{{ settings.public_url or "not set" }} <span class="muted small">(PUBLIC_URL; used for links in notifications)</span></div>
     <div>Background tasks</div><div>{{ settings.task_concurrency }} at a time <span class="muted small">(TASK_CONCURRENCY)</span></div>
     <div>Update log</div><div>kept {{ settings.update_retention_days }} days <span class="muted small">(UPDATE_RETENTION_DAYS)</span></div>
+    <div>MCP for AI agents</div><div>{% if mcp_enabled %}on at <code>/mcp</code>{% if settings.mcp_read_only %}, read-only{% endif %}{% else %}off{% endif %} <span class="muted small">(MCP_TOKEN, MCP_READ_ONLY)</span></div>
   </div>
 </section>
 {% endblock %}
