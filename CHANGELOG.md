@@ -5,7 +5,7 @@ version may contain breaking changes. Release `X.Y.Z` of bot-orchestrator is
 meant to run with release `X.Y.Z` of
 [bot-runner](https://github.com/hametovbr/bot-runner/blob/main/CHANGELOG.md).
 
-## [Unreleased]
+## [0.6.0] - 2026-11-15
 
 ### Added
 
@@ -16,6 +16,7 @@ meant to run with release `X.Y.Z` of
   stored values, files, notifications and any Bot API method. `MCP_READ_ONLY=true`
   offers only tools that read. The handler skill is built in as `docs://`
   resources and the `read_docs` tool. The Settings page shows whether MCP is on.
+  Works with bot-runner 0.4.0.
 
 ### Changed
 
