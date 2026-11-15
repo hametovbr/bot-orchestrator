@@ -77,6 +77,50 @@ This document describes the current design. It changes as the project develops.
   `UPDATE_RETENTION_DAYS`, and deletes files the Bot API server downloaded more
   than `CACHE_RETENTION_HOURS` ago. Every 10 minutes it checks disk space.
 - Storage: SQLite with versioned schema migrations (`PRAGMA user_version`).
+- MCP server at `/mcp` for AI agents, off unless `MCP_TOKEN` is set (see
+  [MCP server](#mcp-server)).
+
+### Code structure of the orchestrator
+
+```
+ web UI (views_*.py, web.py)   MCP server (mcp_server.py)   internal API (runner)
+              │                           │                          │
+              └────────────┬──────────────┘                          │
+                           ▼                                         │
+        operations (ops/): bots, handlers, routes, schedules,        │
+        tasks, modules + packages, files, system                     │
+                           │                                         │
+                           ▼                                         ▼
+        engine (service.py): polling, routing, runner calls, task queue, scheduler
+                           │
+                           ▼
+        storage (db.py, SQLite)          Bot API (telegram.py)
+```
+
+- **Operations are the single place for rules and side effects.** Name rules,
+  syntax checks, cron validation, "a module still imported cannot be deleted",
+  building the command menu, path safety in bot folders: all live in `ops/`. The
+  web UI and the MCP server are thin adapters that translate their input
+  (forms, tool arguments) into operation calls and the results back (pages and
+  flash messages, structured tool results). A new interface (a REST API, a CLI)
+  is another adapter, not another copy of the rules.
+- **Errors are typed, not presentational.** Operations raise `errors.OpError`
+  subclasses (`Invalid`, `NotFound`, `Conflict`, `Unavailable`) with a message
+  for the person or agent. The UI shows them as flash messages or HTTP statuses
+  (an exception handler maps any that escape a view), MCP as tool errors. Results
+  carry `warnings` where something worked with a caveat (a missing shared module).
+- **References by name or id.** Operations accept a bot as id or `@username`,
+  handlers and modules as id or name, because agents and people remember names.
+- **Nothing private leaves the layer.** Bot rows lose `token_enc` (a short
+  `token_hint` instead); secrets are write-only.
+- **Reads may bypass operations for display only.** A page may query the database
+  for something it only shows; every change of state goes through an operation.
+
+Anti-patterns this structure avoids: an interface calling another interface
+(MCP posting to UI form endpoints and parsing redirects), rules duplicated per
+interface and drifting apart, raw table CRUD or SQL exposed to agents, one
+"do anything" tool, reusing the browser session cookie for agents, and returning
+tokens or unbounded data to a model.
 
 ### bot-runner
 
@@ -201,6 +245,47 @@ The Packages page holds a `requirements.txt`-style list (package specifications
 only; options such as `-e` or `--index-url` are rejected). Both sides compute the
 same hash of the normalized list (comments and blank lines removed, first 16 hex
 digits of SHA-256) to tell whether the runner has what the orchestrator wants.
+
+## MCP server
+
+`mcp_server.py` exposes the operations to AI agents over the
+[Model Context Protocol](https://modelcontextprotocol.io) with the official
+Python SDK (`mcp`, `MCPServer`).
+
+- **Transport:** Streamable HTTP at `/mcp` on the orchestrator's port, stateless
+  with JSON responses: every request stands alone, so restarts and several agents
+  need no session state. The session manager runs inside the app's lifespan.
+- **Authentication:** `Authorization: Bearer <MCP_TOKEN>`, compared in constant
+  time. Without `MCP_TOKEN` the route is not registered (404). The path is
+  excluded from the cookie-session guard; the token never opens the web UI and
+  the UI session never opens `/mcp`. DNS-rebinding host checks are off because
+  the token already protects the endpoint and the panel's LAN host names cannot
+  be listed in advance.
+- **Read-only mode:** with `MCP_READ_ONLY=true`, only tools annotated
+  `readOnlyHint` are registered.
+- **Tools** are task-shaped rather than table-shaped, annotated with read-only,
+  destructive and idempotent hints, and return structured content. Times are ISO
+  8601 in `TZ`. `OpError` messages become tool errors (`isError: true`) the agent
+  can act on; anything else is reported as an internal error without details.
+- **Docs:** the handler skill is served as resources `docs://handlers/{skill,sdk,
+  platform,examples}` and through the `read_docs` tool (for clients that do not
+  surface resources). The Docker image includes `skills/` for this.
+
+| Area | Read | Change |
+| --- | --- | --- |
+| Platform | `get_overview`, `get_notifications`, `read_docs` | `set_notifications`, `send_test_notification`, `clean_bot_api_cache` |
+| Bots | `get_bot` | `add_bot`, `set_bot_polling`, `update_bot_settings` (allowed users, `/purge`), `log_out_bot`, `delete_bot` |
+| Update log | `list_updates`, `get_update` | — |
+| Handlers | `list_handlers`, `get_handler`, `list_handler_templates` | `create_handler`, `save_handler`, `activate_handler_version`, `rename_handler`, `delete_handler`, `test_handler` |
+| Routes and menu | `list_routes`, `match_route`, `get_bot_commands` | `create_route`, `update_route`, `delete_route`, `reorder_routes`, `publish_bot_commands` |
+| Schedules | `list_schedules`, `preview_cron` | `create_schedule`, `update_schedule`, `run_schedule`, `delete_schedule` |
+| Tasks | `list_tasks`, `get_task` | `cancel_task`, `retry_task` |
+| Modules and packages | `list_modules`, `get_module`, `get_packages` | `create_module`, `save_module`, `activate_module_version`, `delete_module`, `test_module`, `set_packages` |
+| Secrets, values, files | `list_stored_values`, `list_files`, `read_file` | `set_secret`, `delete_secret`, `set_stored_value`, `delete_stored_value`, `delete_file` |
+| Bot API | — | `call_bot_api` (the API console; `getUpdates` refused while polling) |
+
+Adding a feature means: an operation in `ops/`, then the page and the tool that
+call it. `tests/test_mcp.py` drives the main agent workflows end to end.
 
 ## Orchestrator–runner contract
 
@@ -333,5 +418,6 @@ Task statuses: `queued`, `running`, `ok`, `error`, `timeout`, `cancelled`,
    runner, allowed users by `@username`, versioned releases (0.4), the `/purge` command (0.5); next: export to Git and consistent SQLite backups, sign-in
    through the reverse proxy, simple charts.
 4. **Later, maybe:** user-bots (a Telegram user account driven by code) for
-   conversations with third-party bots; an AI assistant in the editor.
+   conversations with third-party bots; an AI assistant in the editor (agents can
+   already manage everything through the MCP server).
    Webhook mode is not planned: long polling against the local server is enough.

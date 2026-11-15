@@ -1,15 +1,14 @@
 """Internal API used by bot-runner: key-value storage and background tasks."""
 
 import hmac
-import re
 from typing import Annotated, Any
 
 from fastapi import Body, Depends, FastAPI, Header, HTTPException
 
-from .service import BotError, Orchestrator
+from .errors import OpError
+from .ops.bots import KV_KEY
+from .service import Orchestrator
 from .ui import Ui
-
-KV_KEY = re.compile(r"^[\w.:-]{1,200}$")
 
 
 def register(app: FastAPI, ui: Ui) -> None:
@@ -69,8 +68,8 @@ def register(app: FastAPI, ui: Ui) -> None:
             raise HTTPException(status_code=400, detail="args must be a list, kwargs an object")
         try:
             task_id = await o.tasks.enqueue(int(body.get("bot_id") or 0), body)
-        except BotError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from None
+        except OpError as exc:
+            raise HTTPException(status_code=exc.status, detail=str(exc)) from None
         return {"id": task_id}
 
     @app.get("/internal/tasks/{task_id}", dependencies=Runner)

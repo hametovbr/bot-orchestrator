@@ -18,6 +18,10 @@ Recommended deployment:
 - Restrict each bot to a list of allowed Telegram users if it downloads files or
   writes to disk.
 - Use a separate Telegram account for user-bots, never your personal one.
+- The MCP endpoint (`/mcp`) gives an AI agent the same power as a UI user. It is
+  off unless `MCP_TOKEN` is set; use a long random token, keep it in the agent's
+  configuration only, rotate it if it leaks, and set `MCP_READ_ONLY=true` for
+  agents that should only look. Agents never receive bot tokens or secret values.
 
 ## Reporting a vulnerability
 

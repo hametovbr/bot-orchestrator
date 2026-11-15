@@ -5,6 +5,25 @@ version may contain breaking changes. Release `X.Y.Z` of bot-orchestrator is
 meant to run with release `X.Y.Z` of
 [bot-runner](https://github.com/hametovbr/bot-runner/blob/main/CHANGELOG.md).
 
+## [Unreleased]
+
+### Added
+
+- MCP server for AI agents at `/mcp` (Streamable HTTP, bearer token
+  `MCP_TOKEN`; off by default). Agents can see and change everything the web UI
+  can: bots, the update log, handlers with test runs and rollbacks, routes and the
+  command menu, schedules, background tasks, shared modules, packages, secrets,
+  stored values, files, notifications and any Bot API method. `MCP_READ_ONLY=true`
+  offers only tools that read. The handler skill is built in as `docs://`
+  resources and the `read_docs` tool. The Settings page shows whether MCP is on.
+
+### Changed
+
+- New operations layer (`ops/`): the rules behind every action moved out of the
+  web views, which now call it like the MCP server does. Behavior and messages of
+  the UI are unchanged.
+- The Docker image includes `skills/` (served by the MCP endpoint).
+
 ## [0.5.0] - 2026-11-04
 
 ### Added

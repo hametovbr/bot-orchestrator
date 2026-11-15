@@ -1,27 +1,16 @@
 """Per-bot pages: update log, API console, files and bot settings."""
 
-import re
-import shutil
 from pathlib import Path
 from typing import Annotated, Any
 
-from fastapi import Body, Depends, FastAPI, Form, HTTPException, Request
+from fastapi import Body, Depends, FastAPI, Form, Request
 from fastapi.responses import FileResponse
 
-from .service import PURGE_HANDLER, BotError, Orchestrator
-from .ui import Ui
-from .updates import normalize_allowed
-
-SECRET_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,63}$")
-UPDATE_STATUSES = [
-    "ok",
-    "error",
-    "timeout",
-    "dispatch_error",
-    "pending",
-    "no_route",
-    "ignored",
-]
+from .errors import NotFound
+from .ops import Operations
+from .ops.bots import UPDATE_STATUSES
+from .service import PURGE_HANDLER
+from .ui import FAILED, Ui
 
 COMMON_METHODS = [
     "getMe",
@@ -49,8 +38,7 @@ COMMON_METHODS = [
 
 
 def register(app: FastAPI, ui: Ui) -> None:
-    Orch = Annotated[Orchestrator, Depends(ui.orch)]
-    settings = ui.settings
+    Ops = Annotated[Operations, Depends(ui.ops)]
 
     # Update log
 
@@ -59,9 +47,9 @@ def register(app: FastAPI, ui: Ui) -> None:
         return ui.back(f"/bots/{bot_id}/updates")
 
     @app.get("/bots/{bot_id}/updates")
-    async def updates_page(request: Request, o: Orch, bot_id: int, status: str | None = None):
+    async def updates_page(request: Request, ops: Ops, bot_id: int, status: str | None = None):
         bot = await ui.bot(bot_id)
-        rows = await o.db.list_updates(bot_id, status=status or None)
+        rows = await ops.bots.updates(bot_id, status=status or None)
         return ui.render(
             request,
             "updates.html",
@@ -69,115 +57,72 @@ def register(app: FastAPI, ui: Ui) -> None:
             tab="updates",
             updates=rows,
             status=status or "",
-            statuses=UPDATE_STATUSES,
+            statuses=list(UPDATE_STATUSES),
         )
 
     @app.get("/bots/{bot_id}/updates/{row_id}")
-    async def update_page(request: Request, o: Orch, bot_id: int, row_id: int):
+    async def update_page(request: Request, ops: Ops, bot_id: int, row_id: int):
         bot = await ui.bot(bot_id)
-        row = await o.db.get_update(bot_id, row_id)
-        if not row:
-            raise HTTPException(status_code=404, detail="Update not found")
-        route = await o.db.get_route(bot_id, row["route_id"]) if row["route_id"] else None
-        tasks = [t for t in await o.db.list_tasks(bot_id, limit=200) if t["update_row"] == row_id]
+        row = await ops.bots.update(bot_id, row_id)
         return ui.render(
-            request, "update.html", bot=bot, tab="updates", u=row, route=route, tasks=tasks
+            request,
+            "update.html",
+            bot=bot,
+            tab="updates",
+            u=row,
+            route=row["route"],
+            tasks=row["tasks"],
         )
 
     # API console
 
     @app.get("/bots/{bot_id}/console")
-    async def console_page(request: Request, o: Orch, bot_id: int):
+    async def console_page(request: Request, ops: Ops, bot_id: int):
         bot = await ui.bot(bot_id)
-        history = await o.db.list_console_calls(bot_id)
         return ui.render(
             request,
             "console.html",
             bot=bot,
             tab="console",
-            history=history,
+            history=await ops.bots.console_history(bot_id),
             methods=COMMON_METHODS,
         )
 
     @app.post("/bots/{bot_id}/console")
-    async def console_call(o: Orch, bot_id: int, body: Annotated[dict[str, Any], Body()]):
-        params = body.get("params") or {}
-        if not isinstance(params, dict):
-            raise HTTPException(status_code=400, detail="Parameters must be a JSON object")
-        try:
-            return await o.console_call(bot_id, str(body.get("method", "")), params)
-        except BotError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from None
+    async def console_call(ops: Ops, bot_id: int, body: Annotated[dict[str, Any], Body()]):
+        return await ops.bots.console_call(
+            bot_id, str(body.get("method", "")), body.get("params") or {}
+        )
 
     # Files
 
-    def bot_folder(bot_id: int) -> Path:
-        return Path(settings.files_root) / str(bot_id)
-
-    def inside(bot_id: int, relative: str) -> Path:
-        root = bot_folder(bot_id).resolve()
-        target = (root / relative.lstrip("/")).resolve()
-        if not target.is_relative_to(root):
-            raise HTTPException(status_code=400, detail="Path is outside the bot folder")
-        return target
-
     @app.get("/bots/{bot_id}/files")
-    async def files_page(request: Request, bot_id: int, path: str = ""):
+    async def files_page(request: Request, ops: Ops, bot_id: int, path: str = ""):
         bot = await ui.bot(bot_id)
-        folder = inside(bot_id, path)
-        root = bot_folder(bot_id).resolve()
-        entries = []
-        if folder.is_dir():
-            for item in sorted(folder.iterdir(), key=lambda p: (not p.is_dir(), p.name.lower())):
-                stat = item.stat()
-                entries.append(
-                    {
-                        "name": item.name,
-                        "path": str(item.relative_to(root)),
-                        "is_dir": item.is_dir(),
-                        "size": stat.st_size,
-                        "modified": stat.st_mtime,
-                    }
-                )
-        rel = "" if folder == root else str(folder.relative_to(root))
-        crumbs = []
-        acc: list[str] = []
-        for part in Path(rel).parts:
-            acc.append(part)
-            crumbs.append({"name": part, "path": "/".join(acc)})
-        usage = (
-            sum(f.stat().st_size for f in root.rglob("*") if f.is_file()) if root.exists() else 0
-        )
+        listing = await ops.files.list(bot_id, path)
         return ui.render(
             request,
             "files.html",
             bot=bot,
             tab="files",
-            entries=entries,
-            rel=rel,
-            crumbs=crumbs,
-            exists=folder.is_dir(),
-            usage=usage,
+            entries=listing["entries"],
+            rel=listing["path"],
+            crumbs=listing["crumbs"],
+            exists=listing["exists"],
+            usage=listing["usage"],
         )
 
     @app.get("/bots/{bot_id}/files/download")
-    async def download_file(bot_id: int, path: str):
-        await ui.bot(bot_id)
-        target = inside(bot_id, path)
-        if not target.is_file():
-            raise HTTPException(status_code=404, detail="File not found")
+    async def download_file(ops: Ops, bot_id: int, path: str):
+        target = await ops.files.file(bot_id, path)
         return FileResponse(target, filename=target.name)
 
     @app.post("/bots/{bot_id}/files/delete")
-    async def delete_file(request: Request, bot_id: int, path: Annotated[str, Form()]):
-        await ui.bot(bot_id)
-        target = inside(bot_id, path)
-        if target == bot_folder(bot_id).resolve():
-            raise HTTPException(status_code=400, detail="Cannot delete the bot folder")
-        if target.is_dir():
-            shutil.rmtree(target)
-        elif target.exists():
-            target.unlink()
+    async def delete_file(request: Request, ops: Ops, bot_id: int, path: Annotated[str, Form()]):
+        try:
+            await ops.files.delete(bot_id, path)
+        except NotFound:
+            pass  # Already gone: the result the user wanted.
         ui.flash(request, f"Deleted {path}.", "success")
         parent = str(Path(path).parent)
         return ui.back(f"/bots/{bot_id}/files?path={'' if parent == '.' else parent}")
@@ -185,47 +130,38 @@ def register(app: FastAPI, ui: Ui) -> None:
     # Bot settings
 
     @app.get("/bots/{bot_id}/settings")
-    async def settings_page(request: Request, o: Orch, bot_id: int):
+    async def settings_page(request: Request, ops: Ops, bot_id: int):
         bot = await ui.bot(bot_id)
         return ui.render(
             request,
             "settings.html",
             bot=bot,
             tab="settings",
-            secrets=await o.db.list_secret_names(bot_id),
-            kv=await o.db.kv_list(bot_id),
-            senders=await o.db.recent_senders(limit=8, bot_id=bot_id),
+            secrets=await ops.bots.secret_names(bot_id),
+            kv=await ops.bots.kv_list(bot_id),
+            senders=await ops.bots.recent_senders(bot_id, limit=8),
             purge_handler=PURGE_HANDLER,
         )
 
     @app.post("/bots/{bot_id}/pause")
-    async def pause(request: Request, o: Orch, bot_id: int):
-        await o.pause(bot_id)
+    async def pause(request: Request, ops: Ops, bot_id: int):
+        await ops.bots.pause(bot_id)
         ui.flash(request, "Polling paused. Updates wait on the Bot API server for up to 24 hours.")
         return ui.back(f"/bots/{bot_id}/settings")
 
     @app.post("/bots/{bot_id}/resume")
-    async def resume(request: Request, o: Orch, bot_id: int):
-        await o.resume(bot_id)
+    async def resume(request: Request, ops: Ops, bot_id: int):
+        await ops.bots.resume(bot_id)
         ui.flash(request, "Polling started.", "success")
         return ui.back(f"/bots/{bot_id}/settings")
 
     @app.post("/bots/{bot_id}/allowed-users")
     async def allowed_users(
-        request: Request, o: Orch, bot_id: int, allowed: Annotated[str, Form()] = ""
+        request: Request, ops: Ops, bot_id: int, allowed: Annotated[str, Form()] = ""
     ):
-        await ui.bot(bot_id)
-        entries, invalid = normalize_allowed(allowed)
-        if invalid:
-            ui.flash(
-                request,
-                "Not a Telegram user id or username: "
-                + ", ".join(invalid)
-                + ". Use numeric ids or @usernames.",
-                "error",
-            )
+        entries = await ui.act(request, ops.bots.set_allowed_users(bot_id, allowed))
+        if entries is FAILED:
             return ui.back(f"/bots/{bot_id}/settings")
-        await o.db.set_allowed_users(bot_id, ",".join(entries))
         ui.flash(
             request,
             "Allowed users saved."
@@ -237,11 +173,10 @@ def register(app: FastAPI, ui: Ui) -> None:
 
     @app.post("/bots/{bot_id}/purge-command")
     async def purge_command(
-        request: Request, o: Orch, bot_id: int, enabled: Annotated[str, Form()] = ""
+        request: Request, ops: Ops, bot_id: int, enabled: Annotated[str, Form()] = ""
     ):
-        await ui.bot(bot_id)
         on = enabled == "on"
-        await o.db.set_purge_command(bot_id, on)
+        await ops.bots.set_purge_command(bot_id, on)
         ui.flash(
             request,
             "/purge is on: it deletes the last 48 hours of a private chat."
@@ -254,60 +189,48 @@ def register(app: FastAPI, ui: Ui) -> None:
     @app.post("/bots/{bot_id}/secrets")
     async def set_secret(
         request: Request,
-        o: Orch,
+        ops: Ops,
         bot_id: int,
         name: Annotated[str, Form()],
         value: Annotated[str, Form()],
     ):
-        await ui.bot(bot_id)
-        name = name.strip()
-        if not SECRET_NAME.match(name):
-            ui.flash(
-                request,
-                "Secret names may use letters, digits and _ and must not start with a digit.",
-                "error",
-            )
+        name = await ui.act(request, ops.bots.set_secret(bot_id, name, value))
+        if name is FAILED:
             return ui.back(f"/bots/{bot_id}/settings")
-        await o.db.set_secret(bot_id, name, o.cipher.encrypt(value))
         ui.flash(request, f"Secret {name} saved.", "success")
         return ui.back(f"/bots/{bot_id}/settings")
 
     @app.post("/bots/{bot_id}/secrets/delete")
-    async def delete_secret(request: Request, o: Orch, bot_id: int, name: Annotated[str, Form()]):
-        await o.db.delete_secret(bot_id, name)
+    async def delete_secret(request: Request, ops: Ops, bot_id: int, name: Annotated[str, Form()]):
+        await ops.bots.delete_secret(bot_id, name)
         ui.flash(request, f"Secret {name} deleted.", "success")
         return ui.back(f"/bots/{bot_id}/settings")
 
     @app.post("/bots/{bot_id}/kv/delete")
-    async def delete_kv(request: Request, o: Orch, bot_id: int, key: Annotated[str, Form()]):
-        await o.db.kv_delete(bot_id, key)
+    async def delete_kv(request: Request, ops: Ops, bot_id: int, key: Annotated[str, Form()]):
+        await ops.bots.kv_delete(bot_id, key)
         ui.flash(request, f"Key {key} deleted.", "success")
         return ui.back(f"/bots/{bot_id}/settings")
 
     @app.post("/bots/{bot_id}/cloud-logout")
-    async def cloud_logout(request: Request, o: Orch, bot_id: int):
-        bot = await ui.bot(bot_id)
-        for note in await o.log_out_from_cloud(o.token_of(bot)):
+    async def cloud_logout(request: Request, ops: Ops, bot_id: int):
+        for note in await ops.bots.log_out_cloud(bot_id):
             ui.flash(request, note)
         return ui.back(f"/bots/{bot_id}/settings")
 
     @app.post("/bots/{bot_id}/local-logout")
-    async def local_logout(request: Request, o: Orch, bot_id: int):
-        try:
-            await o.log_out_local(bot_id)
+    async def local_logout(request: Request, ops: Ops, bot_id: int):
+        if await ui.act(request, ops.bots.log_out_local(bot_id)) is not FAILED:
             ui.flash(
                 request,
                 "Logged out from the local server. The cloud Bot API accepts the bot again "
                 "in about 10 minutes.",
                 "success",
             )
-        except BotError as exc:
-            ui.flash(request, str(exc), "error")
         return ui.back(f"/bots/{bot_id}/settings")
 
     @app.post("/bots/{bot_id}/delete")
-    async def delete_bot(request: Request, o: Orch, bot_id: int):
-        bot = await ui.bot(bot_id)
-        await o.delete_bot(bot_id)
+    async def delete_bot(request: Request, ops: Ops, bot_id: int):
+        bot = await ops.bots.delete(bot_id)
         ui.flash(request, f"@{bot['username']} removed. Its files are kept on disk.", "success")
         return ui.back("/")

@@ -18,6 +18,7 @@ import httpx
 from . import cron, maintenance, purge
 from .config import Settings
 from .db import Database
+from .errors import Invalid, NotFound
 from .notify import Notifier
 from .packages import Packages
 from .routing import find_route
@@ -33,7 +34,7 @@ FAILED = ("error", "timeout", "dispatch_error", "interrupted")
 TASK_ACTIVE = ("queued", "running")
 
 
-class BotError(Exception):
+class BotError(Invalid):
     """A user-facing error from a bot operation."""
 
 
@@ -102,7 +103,7 @@ class Orchestrator:
     async def require_bot(self, bot_id: int) -> dict[str, Any]:
         bot = await self.db.get_bot(bot_id)
         if not bot:
-            raise BotError("Bot not found")
+            raise NotFound("Bot not found")
         return bot
 
     def is_polling(self, bot_id: int) -> bool:
@@ -626,7 +627,7 @@ class TaskManager:
     async def retry(self, bot_id: int, task_id: int) -> int:
         task = await self._o.db.get_task(task_id, bot_id)
         if not task:
-            raise BotError("Task not found")
+            raise NotFound("Task not found")
         return await self.enqueue(
             bot_id,
             {
